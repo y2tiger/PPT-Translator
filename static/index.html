@@ -17,18 +17,21 @@
             <!-- Upload Section -->
             <section id="upload-section" class="card">
                 <h2>1. PPT 파일 업로드</h2>
-                <div class="upload-area" id="upload-area">
-                    <div class="upload-icon">📄</div>
+                <div class="upload-area" id="upload-area" role="button" tabindex="0"
+                     aria-label="PPT 파일 업로드 - 드래그 앤 드롭 또는 클릭하여 선택">
+                    <span class="upload-icon" aria-hidden="true">📄</span>
                     <p>파일을 드래그하거나 클릭하여 선택</p>
-                    <p class="hint">.pptx 파일만 지원</p>
-                    <input type="file" id="file-input" accept=".pptx,.ppt" hidden>
+                    <p class="hint">.pptx 파일만 지원 (최대 50MB)</p>
+                    <input type="file" id="file-input" accept=".pptx" hidden aria-hidden="true">
                 </div>
                 <div id="file-info" class="file-info hidden">
                     <div class="file-details">
                         <span class="file-name"></span>
                         <span class="file-stats"></span>
                     </div>
-                    <button class="btn-remove" onclick="removeFile()">✕</button>
+                    <button class="btn-remove" onclick="removeFile()" aria-label="파일 제거">
+                        <span aria-hidden="true">✕</span>
+                    </button>
                 </div>
             </section>
 
@@ -38,19 +41,21 @@
                 <div class="options-grid">
                     <div class="option-group">
                         <label for="source-lang">원본 언어</label>
-                        <select id="source-lang">
+                        <select id="source-lang" aria-describedby="source-lang-desc">
                             <option value="">선택...</option>
                         </select>
+                        <span id="source-lang-desc" class="sr-only">번역할 원본 언어를 선택하세요</span>
                     </div>
                     <div class="option-group">
                         <label for="target-lang">목표 언어</label>
-                        <select id="target-lang">
+                        <select id="target-lang" aria-describedby="target-lang-desc">
                             <option value="">선택...</option>
                         </select>
+                        <span id="target-lang-desc" class="sr-only">번역될 목표 언어를 선택하세요</span>
                     </div>
                     <div class="option-group">
                         <label for="review-loops">리뷰 반복 횟수</label>
-                        <select id="review-loops">
+                        <select id="review-loops" aria-describedby="review-loops-desc">
                             <option value="5" selected>5회 (권장)</option>
                             <option value="6">6회</option>
                             <option value="7">7회</option>
@@ -58,24 +63,25 @@
                             <option value="9">9회</option>
                             <option value="10">10회 (최고 품질)</option>
                         </select>
+                        <span id="review-loops-desc" class="sr-only">더 많은 리뷰 횟수는 높은 품질을 제공하지만 시간이 더 걸립니다</span>
                     </div>
                 </div>
                 <div class="agent-info">
                     <h3>멀티에이전트 프로세스</h3>
                     <div class="agent-flow">
                         <div class="agent">
-                            <div class="agent-icon">🌐</div>
+                            <span class="agent-icon" aria-hidden="true">🌐</span>
                             <div class="agent-name">Translator</div>
                             <div class="agent-desc">초기 번역 수행</div>
                         </div>
-                        <div class="arrow">→</div>
+                        <span class="arrow" aria-hidden="true">→</span>
                         <div class="agent">
-                            <div class="agent-icon">🔍</div>
+                            <span class="agent-icon" aria-hidden="true">🔍</span>
                             <div class="agent-name">Reviewer</div>
                             <div class="agent-desc">품질 검토 및 피드백</div>
                         </div>
-                        <div class="arrow loop-arrow">↻</div>
-                        <div class="loop-label">최소 5회 반복</div>
+                        <span class="arrow loop-arrow" aria-hidden="true">↻</span>
+                        <span class="loop-label">최소 5회 반복</span>
                     </div>
                 </div>
                 <button id="start-btn" class="btn-primary" onclick="startTranslation()">
@@ -87,15 +93,16 @@
             <section id="progress-section" class="card hidden">
                 <h2>3. 번역 진행 상황</h2>
                 <div class="progress-container">
-                    <div class="progress-bar">
+                    <div class="progress-bar" role="progressbar" aria-valuenow="0"
+                         aria-valuemin="0" aria-valuemax="100" aria-label="번역 진행률">
                         <div class="progress-fill" id="progress-fill"></div>
                     </div>
-                    <div class="progress-text" id="progress-text">0%</div>
+                    <div class="progress-text" id="progress-text" aria-live="polite">0%</div>
                 </div>
                 <div class="status-details">
                     <div class="status-item">
                         <span class="status-label">상태:</span>
-                        <span id="status-message" class="status-value">대기중...</span>
+                        <span id="status-message" class="status-value" aria-live="polite">대기중...</span>
                     </div>
                     <div class="status-item">
                         <span class="status-label">현재 항목:</span>
@@ -107,19 +114,22 @@
                     </div>
                 </div>
                 <div id="agent-activity" class="agent-activity">
-                    <div class="activity-log" id="activity-log"></div>
+                    <div class="activity-log" id="activity-log" aria-label="활동 로그"></div>
                 </div>
+                <button class="btn-secondary btn-cancel" onclick="cancelTranslation()">
+                    취소
+                </button>
             </section>
 
             <!-- Result Section -->
             <section id="result-section" class="card hidden">
                 <h2>4. 번역 완료</h2>
                 <div class="result-content">
-                    <div class="success-icon">✅</div>
+                    <span class="success-icon" aria-hidden="true">✅</span>
                     <p class="result-message">번역이 성공적으로 완료되었습니다!</p>
                     <div class="result-stats" id="result-stats"></div>
                     <button class="btn-primary btn-download" onclick="downloadFile()">
-                        📥 번역된 파일 다운로드
+                        <span aria-hidden="true">📥</span> 번역된 파일 다운로드
                     </button>
                     <button class="btn-secondary" onclick="resetForm()">
                         새 파일 번역하기
@@ -131,8 +141,8 @@
             <section id="error-section" class="card hidden">
                 <h2>오류 발생</h2>
                 <div class="error-content">
-                    <div class="error-icon">❌</div>
-                    <p class="error-message" id="error-message"></p>
+                    <span class="error-icon" aria-hidden="true">❌</span>
+                    <p class="error-message" id="error-message" role="alert"></p>
                     <button class="btn-secondary" onclick="resetForm()">
                         다시 시도
                     </button>
@@ -141,7 +151,7 @@
         </main>
 
         <footer>
-            <p>Powered by Claude AI Multi-Agent System</p>
+            <p>Claude AI 멀티에이전트 시스템 기반</p>
         </footer>
     </div>
 

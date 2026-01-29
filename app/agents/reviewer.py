@@ -1,15 +1,55 @@
 import anthropic
 import json
-from typing import Optional
+import structlog
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 from app.models.schemas import Language, LANGUAGE_NAMES, ReviewFeedback
+
+logger = structlog.get_logger(__name__)
 
 
 class ReviewerAgent:
     """Agent responsible for reviewing and critiquing translations."""
 
-    def __init__(self, api_key: str):
-        self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = "claude-sonnet-4-20250514"
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514"):
+        self.client = anthropic.AsyncAnthropic(api_key=api_key)
+        self.model = model
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(
+            (anthropic.RateLimitError, anthropic.APIConnectionError)
+        ),
+    )
+    async def _call_api(
+        self, system_prompt: str, user_prompt: str, max_tokens: int = 2048
+    ) -> str:
+        """Make API call with retry logic."""
+        message = await self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return message.content[0].text
+
+    def _parse_json_response(self, response_text: str) -> dict | None:
+        """Parse JSON from response, handling markdown code blocks."""
+        try:
+            text = response_text.strip()
+            if "```json" in text:
+                json_start = text.find("```json") + 7
+                json_end = text.find("```", json_start)
+                text = text[json_start:json_end]
+            elif "```" in text:
+                json_start = text.find("```") + 3
+                json_end = text.find("```", json_start)
+                text = text[json_start:json_end]
+            return json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning("json_parse_failed", response_preview=response_text[:200])
+            return None
 
     async def review(
         self,
@@ -17,7 +57,7 @@ class ReviewerAgent:
         translated_text: str,
         source_lang: Language,
         target_lang: Language,
-        context: Optional[str] = None,
+        context: str | None = None,
         iteration: int = 1,
     ) -> ReviewFeedback:
         """
@@ -33,6 +73,13 @@ class ReviewerAgent:
         """
         source_name = LANGUAGE_NAMES[source_lang]
         target_name = LANGUAGE_NAMES[target_lang]
+
+        logger.info(
+            "review_started",
+            iteration=iteration,
+            source=source_lang.value,
+            target=target_lang.value,
+        )
 
         system_prompt = f"""You are an expert translation quality reviewer specializing in {source_name} to {target_name} translations.
 Your task is to critically evaluate translations for:
@@ -75,43 +122,36 @@ Respond in JSON format:
 **Context:**
 {context}"""
 
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=2048,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-
-        response_text = message.content[0].text.strip()
-
-        # Parse JSON response
         try:
-            # Extract JSON from response (handle markdown code blocks)
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end]
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end]
+            response_text = await self._call_api(system_prompt, user_prompt)
+            data = self._parse_json_response(response_text)
 
-            data = json.loads(response_text)
+            if data:
+                result = ReviewFeedback(
+                    score=data.get("overall_score", 5.0),
+                    issues=data.get("issues", []),
+                    suggestions=data.get("suggestions", []),
+                    approved=data.get("approved", False),
+                )
+            else:
+                result = ReviewFeedback(
+                    score=6.0,
+                    issues=["Could not parse review response"],
+                    suggestions=["Please re-review"],
+                    approved=False,
+                )
 
-            return ReviewFeedback(
-                score=data.get("overall_score", 5.0),
-                issues=data.get("issues", []),
-                suggestions=data.get("suggestions", []),
-                approved=data.get("approved", False),
+            logger.info(
+                "review_completed",
+                iteration=iteration,
+                score=result.score,
+                approved=result.approved,
             )
-        except json.JSONDecodeError:
-            # Fallback if JSON parsing fails
-            return ReviewFeedback(
-                score=6.0,
-                issues=["Could not parse review response"],
-                suggestions=["Please re-review"],
-                approved=False,
-            )
+            return result
+
+        except Exception as e:
+            logger.error("review_failed", iteration=iteration, error=str(e))
+            raise
 
     async def final_review(
         self,
@@ -126,6 +166,11 @@ Respond in JSON format:
         """
         source_name = LANGUAGE_NAMES[source_lang]
         target_name = LANGUAGE_NAMES[target_lang]
+
+        logger.info(
+            "final_review_started",
+            history_length=len(review_history),
+        )
 
         history_summary = "\n".join(
             f"Round {i+1}: Score {fb.score}/10 - Issues: {', '.join(fb.issues[:2]) if fb.issues else 'None'}"
@@ -156,37 +201,33 @@ Respond in JSON format:
 **Final Translation ({target_name}):**
 {translated_text}"""
 
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=2048,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-
-        response_text = message.content[0].text.strip()
-
         try:
-            if "```json" in response_text:
-                json_start = response_text.find("```json") + 7
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end]
-            elif "```" in response_text:
-                json_start = response_text.find("```") + 3
-                json_end = response_text.find("```", json_start)
-                response_text = response_text[json_start:json_end]
+            response_text = await self._call_api(system_prompt, user_prompt)
+            data = self._parse_json_response(response_text)
 
-            data = json.loads(response_text)
+            if data:
+                result = ReviewFeedback(
+                    score=data.get("overall_score", 5.0),
+                    issues=data.get("issues", []),
+                    suggestions=data.get("suggestions", []),
+                    approved=data.get("approved", False),
+                )
+            else:
+                # On parse failure, do NOT auto-approve
+                result = ReviewFeedback(
+                    score=6.0,
+                    issues=["Final review parsing error - manual review recommended"],
+                    suggestions=[],
+                    approved=False,
+                )
 
-            return ReviewFeedback(
-                score=data.get("overall_score", 5.0),
-                issues=data.get("issues", []),
-                suggestions=data.get("suggestions", []),
-                approved=data.get("approved", False),
+            logger.info(
+                "final_review_completed",
+                score=result.score,
+                approved=result.approved,
             )
-        except json.JSONDecodeError:
-            return ReviewFeedback(
-                score=7.0,
-                issues=["Final review parsing error"],
-                suggestions=[],
-                approved=True,  # Approve after multiple iterations
-            )
+            return result
+
+        except Exception as e:
+            logger.error("final_review_failed", error=str(e))
+            raise

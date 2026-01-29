@@ -1,7 +1,26 @@
-fastapi==0.109.0
-uvicorn[standard]==0.27.0
+# Web framework
+fastapi>=0.109.0,<1.0.0
+uvicorn[standard]>=0.27.0
+
+# PPT processing
 python-pptx==0.6.23
-anthropic==0.42.0
-python-multipart==0.0.6
-aiofiles==23.2.1
-pydantic==2.5.3
+
+# Claude API
+anthropic>=0.42.0
+
+# File handling
+python-multipart>=0.0.9
+aiofiles>=23.2.1
+
+# Data validation
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+
+# Logging
+structlog>=24.1.0
+
+# Retry logic
+tenacity>=8.2.0
+
+# Rate limiting
+slowapi>=0.1.9

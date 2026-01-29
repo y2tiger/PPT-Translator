@@ -9,11 +9,25 @@
     --primary-hover: #4f46e5;
     --success-color: #22c55e;
     --error-color: #ef4444;
+    --warning-color: #f59e0b;
     --bg-color: #0f172a;
     --card-bg: #1e293b;
     --text-primary: #f8fafc;
-    --text-secondary: #94a3b8;
+    --text-secondary: #a1b5ce;
     --border-color: #334155;
+}
+
+/* Screen reader only */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 body {
@@ -67,6 +81,22 @@ header h1 {
     display: none !important;
 }
 
+/* Inline Error */
+.inline-error {
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid var(--error-color);
+    color: var(--error-color);
+    padding: 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
 /* Upload Area */
 .upload-area {
     border: 2px dashed var(--border-color);
@@ -77,9 +107,16 @@ header h1 {
     transition: all 0.3s ease;
 }
 
-.upload-area:hover {
+.upload-area:hover,
+.upload-area:focus {
     border-color: var(--primary-color);
     background: rgba(99, 102, 241, 0.1);
+    outline: none;
+}
+
+.upload-area:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
 }
 
 .upload-area.dragover {
@@ -114,11 +151,16 @@ header h1 {
 .file-details {
     display: flex;
     flex-direction: column;
+    overflow: hidden;
 }
 
 .file-name {
     font-weight: 600;
     color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 250px;
 }
 
 .file-stats {
@@ -132,14 +174,24 @@ header h1 {
     color: var(--text-secondary);
     cursor: pointer;
     font-size: 1.25rem;
-    padding: 0.5rem;
+    padding: 0.75rem;
     border-radius: 4px;
     transition: all 0.2s;
+    min-width: 44px;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .btn-remove:hover {
     color: var(--error-color);
     background: rgba(239, 68, 68, 0.1);
+}
+
+.btn-remove:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
 }
 
 /* Options */
@@ -174,6 +226,11 @@ header h1 {
 .option-group select:focus {
     outline: none;
     border-color: var(--primary-color);
+}
+
+.option-group select:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
 }
 
 /* Agent Info */
@@ -252,9 +309,14 @@ header h1 {
     transition: all 0.3s ease;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
     background: var(--primary-hover);
     transform: translateY(-1px);
+}
+
+.btn-primary:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
 }
 
 .btn-primary:disabled {
@@ -277,6 +339,16 @@ header h1 {
 .btn-secondary:hover {
     color: var(--text-primary);
     border-color: var(--text-secondary);
+}
+
+.btn-secondary:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: 2px;
+}
+
+.btn-cancel {
+    margin-top: 1rem;
+    width: 100%;
 }
 
 /* Progress */
@@ -366,6 +438,7 @@ header h1 {
 .success-icon {
     font-size: 4rem;
     margin-bottom: 1rem;
+    display: block;
 }
 
 .result-message {
@@ -391,6 +464,7 @@ header h1 {
 .error-icon {
     font-size: 4rem;
     margin-bottom: 1rem;
+    display: block;
 }
 
 .error-message {
@@ -407,13 +481,23 @@ footer {
 }
 
 /* Responsive */
-@media (max-width: 600px) {
+@media (max-width: 768px) {
     .container {
-        padding: 1rem;
+        padding: 1.5rem;
     }
 
     header h1 {
         font-size: 2rem;
+    }
+
+    .upload-area {
+        padding: 2rem 1rem;
+    }
+}
+
+@media (max-width: 600px) {
+    .container {
+        padding: 1rem;
     }
 
     .options-grid {
@@ -426,5 +510,9 @@ footer {
 
     .arrow {
         transform: rotate(90deg);
+    }
+
+    .file-name {
+        max-width: 180px;
     }
 }

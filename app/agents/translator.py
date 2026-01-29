@@ -1,22 +1,45 @@
 import anthropic
-from typing import Optional
+import structlog
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 from app.models.schemas import Language, LANGUAGE_NAMES
+
+logger = structlog.get_logger(__name__)
 
 
 class TranslatorAgent:
     """Agent responsible for translating text using Claude API."""
 
-    def __init__(self, api_key: str):
-        self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = "claude-sonnet-4-20250514"
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514"):
+        self.client = anthropic.AsyncAnthropic(api_key=api_key)
+        self.model = model
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(
+            (anthropic.RateLimitError, anthropic.APIConnectionError)
+        ),
+    )
+    async def _call_api(
+        self, system_prompt: str, user_prompt: str, max_tokens: int = 4096
+    ) -> str:
+        """Make API call with retry logic."""
+        message = await self.client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        return message.content[0].text
 
     async def translate(
         self,
         text: str,
         source_lang: Language,
         target_lang: Language,
-        context: Optional[str] = None,
-        previous_feedback: Optional[list[str]] = None,
+        context: str | None = None,
+        previous_feedback: list[str] | None = None,
     ) -> str:
         """
         Translate text from source language to target language.
@@ -30,6 +53,13 @@ class TranslatorAgent:
         """
         source_name = LANGUAGE_NAMES[source_lang]
         target_name = LANGUAGE_NAMES[target_lang]
+
+        logger.info(
+            "translation_started",
+            source=source_lang.value,
+            target=target_lang.value,
+            text_length=len(text),
+        )
 
         system_prompt = f"""You are an expert translator specializing in {source_name} to {target_name} translation.
 Your task is to provide accurate, natural-sounding translations that preserve:
@@ -60,70 +90,10 @@ Previous translation feedback to address:
 
 Please improve your translation based on this feedback."""
 
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-
-        return message.content[0].text.strip()
-
-    async def batch_translate(
-        self,
-        texts: list[str],
-        source_lang: Language,
-        target_lang: Language,
-        context: Optional[str] = None,
-    ) -> list[str]:
-        """Translate multiple texts efficiently."""
-        source_name = LANGUAGE_NAMES[source_lang]
-        target_name = LANGUAGE_NAMES[target_lang]
-
-        if not texts:
-            return []
-
-        # For efficiency, batch small texts together
-        numbered_texts = "\n".join(f"[{i+1}] {t}" for i, t in enumerate(texts))
-
-        system_prompt = f"""You are an expert translator specializing in {source_name} to {target_name} translation.
-Translate each numbered item maintaining the same numbering format.
-Preserve technical terms, formatting, and professional tone.
-Only output the translations with their numbers, nothing else."""
-
-        user_prompt = f"""Translate each numbered item from {source_name} to {target_name}:
-
-{numbered_texts}"""
-
-        if context:
-            user_prompt += f"""
-
-Context for reference:
-{context}"""
-
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=8192,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-
-        # Parse the response
-        response_text = message.content[0].text.strip()
-        translations = []
-
-        for i in range(len(texts)):
-            marker = f"[{i+1}]"
-            next_marker = f"[{i+2}]"
-
-            start = response_text.find(marker)
-            if start != -1:
-                start += len(marker)
-                end = response_text.find(next_marker) if i < len(texts) - 1 else len(response_text)
-                if end == -1:
-                    end = len(response_text)
-                translations.append(response_text[start:end].strip())
-            else:
-                translations.append(texts[i])  # Fallback to original
-
-        return translations
+        try:
+            result = await self._call_api(system_prompt, user_prompt)
+            logger.info("translation_completed", result_length=len(result))
+            return result.strip()
+        except Exception as e:
+            logger.error("translation_failed", error=str(e))
+            raise
