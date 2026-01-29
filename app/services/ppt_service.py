@@ -1,8 +1,6 @@
 from pptx import Presentation
-from pptx.util import Pt
+from pptx.shapes.group import GroupShape
 from typing import Generator
-import copy
-import os
 
 
 class PPTService:
@@ -12,39 +10,42 @@ class PPTService:
         self.file_path = file_path
         self.presentation = Presentation(file_path)
 
+    def _extract_from_shape(self, shape, slide_idx: int) -> Generator[dict, None, None]:
+        """Extract text from a single shape, handling groups recursively."""
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape):
+            for child_shape in shape.shapes:
+                yield from self._extract_from_shape(child_shape, slide_idx)
+            return
+
+        # Handle text frames
+        if shape.has_text_frame:
+            for paragraph in shape.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    if run.text.strip():
+                        yield {
+                            "slide_number": slide_idx,
+                            "shape_id": shape.shape_id,
+                            "text": run.text,
+                        }
+
+        # Handle tables
+        if shape.has_table:
+            for row in shape.table.rows:
+                for cell in row.cells:
+                    if cell.text.strip():
+                        yield {
+                            "slide_number": slide_idx,
+                            "shape_id": shape.shape_id,
+                            "is_table": True,
+                            "text": cell.text,
+                        }
+
     def extract_texts(self) -> Generator[dict, None, None]:
         """Extract all text elements from the presentation."""
         for slide_idx, slide in enumerate(self.presentation.slides, 1):
             for shape in slide.shapes:
-                if shape.has_text_frame:
-                    for paragraph in shape.text_frame.paragraphs:
-                        for run in paragraph.runs:
-                            if run.text.strip():
-                                yield {
-                                    "slide_number": slide_idx,
-                                    "shape_id": shape.shape_id,
-                                    "paragraph_idx": paragraph._p.getparent().index(paragraph._p),
-                                    "run_idx": paragraph._p.index(run._r),
-                                    "text": run.text,
-                                    "font_size": run.font.size,
-                                    "font_name": run.font.name,
-                                    "bold": run.font.bold,
-                                    "italic": run.font.italic,
-                                }
-
-                # Handle tables
-                if shape.has_table:
-                    for row_idx, row in enumerate(shape.table.rows):
-                        for col_idx, cell in enumerate(row.cells):
-                            if cell.text.strip():
-                                yield {
-                                    "slide_number": slide_idx,
-                                    "shape_id": shape.shape_id,
-                                    "is_table": True,
-                                    "row_idx": row_idx,
-                                    "col_idx": col_idx,
-                                    "text": cell.text,
-                                }
+                yield from self._extract_from_shape(shape, slide_idx)
 
     def get_all_texts(self) -> list[dict]:
         """Get all texts as a list."""
@@ -53,6 +54,33 @@ class PPTService:
     def get_slide_count(self) -> int:
         """Return the number of slides."""
         return len(self.presentation.slides)
+
+    def _apply_to_shape(self, shape, translations: dict[str, str]):
+        """Apply translations to a single shape, handling groups recursively."""
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape):
+            for child_shape in shape.shapes:
+                self._apply_to_shape(child_shape, translations)
+            return
+
+        # Handle text frames
+        if shape.has_text_frame:
+            for paragraph in shape.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    if run.text in translations:
+                        run.text = translations[run.text]
+
+        # Handle tables
+        if shape.has_table:
+            for row in shape.table.rows:
+                for cell in row.cells:
+                    if cell.text in translations:
+                        for para in cell.text_frame.paragraphs:
+                            if para.text in translations:
+                                if para.runs:
+                                    para.runs[0].text = translations[para.text]
+                                    for run in para.runs[1:]:
+                                        run.text = ""
 
     def apply_translations(self, translations: dict[str, str], output_path: str) -> str:
         """
@@ -64,39 +92,7 @@ class PPTService:
         """
         for slide in self.presentation.slides:
             for shape in slide.shapes:
-                if shape.has_text_frame:
-                    for paragraph in shape.text_frame.paragraphs:
-                        for run in paragraph.runs:
-                            original = run.text
-                            if original in translations:
-                                run.text = translations[original]
-
-                # Handle tables
-                if shape.has_table:
-                    for row in shape.table.rows:
-                        for cell in row.cells:
-                            if cell.text in translations:
-                                # Preserve formatting by updating the first paragraph
-                                if cell.text_frame.paragraphs:
-                                    for para in cell.text_frame.paragraphs:
-                                        full_text = para.text
-                                        if full_text in translations:
-                                            if para.runs:
-                                                # Keep first run with translated text
-                                                para.runs[0].text = translations[full_text]
-                                                # Clear other runs
-                                                for run in para.runs[1:]:
-                                                    run.text = ""
+                self._apply_to_shape(shape, translations)
 
         self.presentation.save(output_path)
         return output_path
-
-    def get_context_for_slide(self, slide_number: int) -> str:
-        """Get context from surrounding text for better translation."""
-        texts = []
-        for slide_idx, slide in enumerate(self.presentation.slides, 1):
-            if abs(slide_idx - slide_number) <= 1:  # Current and adjacent slides
-                for shape in slide.shapes:
-                    if shape.has_text_frame:
-                        texts.append(shape.text_frame.text)
-        return " ".join(texts)
