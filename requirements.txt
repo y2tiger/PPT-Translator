@@ -5,8 +5,8 @@ uvicorn[standard]>=0.27.0
 # PPT processing
 python-pptx==0.6.23
 
-# Claude API
-anthropic>=0.42.0
+# OpenAI API
+openai>=1.0.0
 
 # File handling
 python-multipart>=0.0.9

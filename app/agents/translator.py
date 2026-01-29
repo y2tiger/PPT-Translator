@@ -1,4 +1,4 @@
-import anthropic
+import openai
 import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -8,30 +8,32 @@ logger = structlog.get_logger(__name__)
 
 
 class TranslatorAgent:
-    """Agent responsible for translating text using Claude API."""
+    """Agent responsible for translating text using OpenAI API."""
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514"):
-        self.client = anthropic.AsyncAnthropic(api_key=api_key)
+    def __init__(self, api_key: str, model: str = "gpt-4o"):
+        self.client = openai.AsyncOpenAI(api_key=api_key)
         self.model = model
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type(
-            (anthropic.RateLimitError, anthropic.APIConnectionError)
+            (openai.RateLimitError, openai.APIConnectionError)
         ),
     )
     async def _call_api(
         self, system_prompt: str, user_prompt: str, max_tokens: int = 4096
     ) -> str:
         """Make API call with retry logic."""
-        message = await self.client.messages.create(
+        response = await self.client.chat.completions.create(
             model=self.model,
             max_tokens=max_tokens,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
         )
-        return message.content[0].text
+        return response.choices[0].message.content
 
     async def translate(
         self,

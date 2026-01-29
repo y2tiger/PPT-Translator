@@ -46,9 +46,9 @@ limiter = Limiter(key_func=get_remote_address)
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     # Startup
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        logger.warning("ANTHROPIC_API_KEY not set - translations will fail")
+        logger.warning("OPENAI_API_KEY not set - translations will fail")
     else:
         logger.info("Application started", api_key_configured=True)
 
@@ -101,7 +101,7 @@ def validate_file_id(file_id: str) -> str:
 
 def get_api_key() -> str:
     """Get API key from environment."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(
             status_code=500,
@@ -122,7 +122,7 @@ async def health_check():
     checks = {
         "status": "healthy",
         "checks": {
-            "api_key_configured": bool(os.environ.get("ANTHROPIC_API_KEY")),
+            "api_key_configured": bool(os.environ.get("OPENAI_API_KEY")),
             "upload_dir_exists": UPLOAD_DIR.exists(),
         },
     }
@@ -238,7 +238,7 @@ async def process_translation(
     )
 
     try:
-        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             translation_status[file_id] = TranslationStatus(
                 status="error",
