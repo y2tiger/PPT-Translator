@@ -228,7 +228,6 @@ async def process_translation(
     file_id: str,
     source_lang: Language,
     target_lang: Language,
-    min_review_loops: int,
 ):
     """Background task for translation processing."""
     logger.info(
@@ -236,7 +235,6 @@ async def process_translation(
         file_id=file_id,
         source=source_lang.value,
         target=target_lang.value,
-        min_review_loops=min_review_loops,
     )
 
     try:
@@ -256,7 +254,7 @@ async def process_translation(
         output_path = UPLOAD_DIR / f"{file_id}_translated.pptx"
 
         ppt_service = PPTService(str(file_path))
-        orchestrator = TranslationOrchestrator(api_key, min_review_loops)
+        orchestrator = TranslationOrchestrator(api_key)
 
         # Extract texts
         texts_data = ppt_service.get_all_texts()
@@ -323,7 +321,7 @@ async def process_translation(
             progress=95,
             total_slides=ppt_service.get_slide_count(),
             current_slide=total_texts,
-            review_loop=min_review_loops,
+            review_loop=1,
             message="번역 결과를 PPT에 적용 중...",
         )
 
@@ -334,7 +332,7 @@ async def process_translation(
             progress=100,
             total_slides=ppt_service.get_slide_count(),
             current_slide=total_texts,
-            review_loop=min_review_loops,
+            review_loop=1,
             message="번역이 완료되었습니다!",
         )
 
@@ -364,7 +362,6 @@ async def start_translation(
     background_tasks: BackgroundTasks,
     source_language: str = Form(...),
     target_language: str = Form(...),
-    min_review_loops: int = Form(5),
 ):
     """Start translation process."""
     file_id = validate_file_id(file_id)
@@ -382,9 +379,6 @@ async def start_translation(
     if source_lang == target_lang:
         raise HTTPException(status_code=400, detail="원본 언어와 대상 언어가 같습니다")
 
-    # Validate review loops
-    min_review_loops = max(5, min(10, min_review_loops))
-
     # Initialize status
     translation_status[file_id] = TranslationStatus(
         status="queued",
@@ -401,7 +395,6 @@ async def start_translation(
         file_id,
         source_lang,
         target_lang,
-        min_review_loops,
     )
 
     logger.info("translation_queued", file_id=file_id)

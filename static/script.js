@@ -210,7 +210,6 @@ function resetUploadArea() {
 async function startTranslation() {
     const sourceLang = sourceLangSelect.value;
     const targetLang = targetLangSelect.value;
-    const reviewLoops = document.getElementById('review-loops').value;
 
     if (!sourceLang || !targetLang) {
         showInlineError('원본 언어와 목표 언어를 모두 선택해주세요');
@@ -230,7 +229,6 @@ async function startTranslation() {
     const formData = new FormData();
     formData.append('source_language', sourceLang);
     formData.append('target_language', targetLang);
-    formData.append('min_review_loops', reviewLoops);
 
     try {
         const response = await fetch(`/api/translate/${currentFileId}`, {
@@ -338,7 +336,6 @@ function updateProgress(status) {
     const progressText = document.getElementById('progress-text');
     const statusMessage = document.getElementById('status-message');
     const currentItem = document.getElementById('current-item');
-    const reviewRound = document.getElementById('review-round');
     const progressBar = document.querySelector('.progress-bar');
 
     const progress = status.progress || 0;
@@ -352,9 +349,6 @@ function updateProgress(status) {
     const totalSlides = status.total_slides || 0;
     const currentSlide = status.current_slide || 0;
     currentItem.textContent = totalSlides > 0 ? `${currentSlide} / ${totalSlides}` : '-';
-
-    const reviewLoop = status.review_loop || 0;
-    reviewRound.textContent = reviewLoop > 0 ? `${reviewLoop}회차` : '-';
 
     // Add to activity log
     if (status.message && status.message !== lastLogMessage) {
@@ -406,11 +400,7 @@ function showResult(status) {
     const slideInfo = document.createElement('p');
     slideInfo.textContent = `총 슬라이드: ${status.total_slides || 0}개`;
 
-    const reviewInfo = document.createElement('p');
-    reviewInfo.textContent = `완료된 리뷰 횟수: ${status.review_loop || 0}회`;
-
     stats.appendChild(slideInfo);
-    stats.appendChild(reviewInfo);
 }
 
 // Download file
@@ -447,7 +437,6 @@ function resetForm() {
     resetUploadArea();
     sourceLangSelect.value = 'en';
     targetLangSelect.value = 'ko';
-    document.getElementById('review-loops').value = '5';
 
     // Reset start button
     const startBtn = document.getElementById('start-btn');

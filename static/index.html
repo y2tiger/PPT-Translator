@@ -53,18 +53,6 @@
                         </select>
                         <span id="target-lang-desc" class="sr-only">번역될 목표 언어를 선택하세요</span>
                     </div>
-                    <div class="option-group">
-                        <label for="review-loops">리뷰 반복 횟수</label>
-                        <select id="review-loops" aria-describedby="review-loops-desc">
-                            <option value="5" selected>5회 (권장)</option>
-                            <option value="6">6회</option>
-                            <option value="7">7회</option>
-                            <option value="8">8회</option>
-                            <option value="9">9회</option>
-                            <option value="10">10회 (최고 품질)</option>
-                        </select>
-                        <span id="review-loops-desc" class="sr-only">더 많은 리뷰 횟수는 높은 품질을 제공하지만 시간이 더 걸립니다</span>
-                    </div>
                 </div>
                 <div class="agent-info">
                     <h3>멀티에이전트 프로세스</h3>
@@ -80,8 +68,8 @@
                             <div class="agent-name">Reviewer</div>
                             <div class="agent-desc">품질 검토 및 피드백</div>
                         </div>
-                        <span class="arrow loop-arrow" aria-hidden="true">↻</span>
-                        <span class="loop-label">최소 5회 반복</span>
+                        <span class="arrow" aria-hidden="true">→</span>
+                        <span class="loop-label">품질 검증</span>
                     </div>
                 </div>
                 <button id="start-btn" class="btn-primary" onclick="startTranslation()">
@@ -107,10 +95,6 @@
                     <div class="status-item">
                         <span class="status-label">현재 항목:</span>
                         <span id="current-item" class="status-value">-</span>
-                    </div>
-                    <div class="status-item">
-                        <span class="status-label">리뷰 라운드:</span>
-                        <span id="review-round" class="status-value">-</span>
                     </div>
                 </div>
                 <div id="agent-activity" class="agent-activity">
