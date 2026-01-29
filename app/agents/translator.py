@@ -1,3 +1,4 @@
+import json
 import openai
 import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -134,3 +135,118 @@ Output: "Jakość produktu" """
         except Exception as e:
             logger.error("translation_failed", error=str(e))
             return text  # Return original on error instead of raising
+
+    async def translate_slide_batch(
+        self,
+        texts: list[str],
+        source_lang: Language,
+        target_lang: Language,
+        slide_number: int,
+    ) -> dict[str, str]:
+        """
+        Translate all texts from a slide together for better context.
+        Returns a dict mapping original text to translated text.
+        """
+        if not texts:
+            return {}
+
+        # Filter out texts that should be skipped
+        texts_to_translate = []
+        skipped_texts = {}
+
+        for text in texts:
+            if self._should_skip_translation(text):
+                skipped_texts[text] = text  # Keep original
+            else:
+                texts_to_translate.append(text)
+
+        if not texts_to_translate:
+            return skipped_texts
+
+        source_name = LANGUAGE_NAMES[source_lang]
+        target_name = LANGUAGE_NAMES[target_lang]
+
+        logger.info(
+            "slide_batch_translation_started",
+            slide_number=slide_number,
+            text_count=len(texts_to_translate),
+        )
+
+        # Build numbered list for translation
+        numbered_texts = "\n".join(
+            f"[{i+1}] {text}" for i, text in enumerate(texts_to_translate)
+        )
+
+        system_prompt = f"""You are a professional translator. Translate the following texts from {source_name} to {target_name}.
+
+These texts are all from the same presentation slide, so maintain consistency in terminology and style.
+
+CRITICAL RULES:
+1. Return ONLY a JSON object mapping the number to the translation
+2. Keep brand names, company names, or acronyms (e.g., "SL", "IBM") unchanged
+3. Maintain the same length/brevity as the original when possible
+4. Never add explanations, apologies, or comments
+5. If a text is already in the target language, return it unchanged
+
+Example input:
+[1] 안녕하세요
+[2] SL 회사
+[3] 제품 품질
+
+Example output:
+{{"1": "Dzień dobry", "2": "SL Firma", "3": "Jakość produktu"}}
+
+Now translate:"""
+
+        user_prompt = numbered_texts
+
+        try:
+            result = await self._call_api(system_prompt, user_prompt, max_tokens=4096)
+            result = result.strip()
+
+            # Extract JSON from response (handle markdown code blocks)
+            if "```" in result:
+                # Extract content between code blocks
+                import re
+                json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', result)
+                if json_match:
+                    result = json_match.group(1)
+
+            # Parse JSON response
+            translations_dict = json.loads(result)
+
+            # Build result mapping
+            result_mapping = dict(skipped_texts)  # Start with skipped texts
+
+            for i, text in enumerate(texts_to_translate):
+                key = str(i + 1)
+                if key in translations_dict:
+                    translated = translations_dict[key]
+                    # Validate translation
+                    if self._is_refusal(translated):
+                        result_mapping[text] = text
+                    elif len(translated) > len(text) * 3 and len(text) > 5:
+                        result_mapping[text] = text
+                    else:
+                        result_mapping[text] = translated
+                else:
+                    result_mapping[text] = text  # Keep original if not found
+
+            logger.info(
+                "slide_batch_translation_completed",
+                slide_number=slide_number,
+                translated_count=len(result_mapping),
+            )
+            return result_mapping
+
+        except json.JSONDecodeError as e:
+            logger.error("batch_translation_json_error", error=str(e), response=result[:200])
+            # Fallback: translate individually
+            result_mapping = dict(skipped_texts)
+            for text in texts_to_translate:
+                result_mapping[text] = await self.translate(text, source_lang, target_lang)
+            return result_mapping
+        except Exception as e:
+            logger.error("batch_translation_failed", error=str(e))
+            # Return originals on error
+            return {text: text for text in texts}

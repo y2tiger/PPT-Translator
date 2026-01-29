@@ -16,6 +16,7 @@ from slowapi.errors import RateLimitExceeded
 from app.models.schemas import Language, TranslationStatus, LANGUAGE_NAMES
 from app.services.ppt_service import PPTService
 from app.agents.orchestrator import TranslationOrchestrator
+from app.agents.translator import TranslatorAgent
 
 # Configure structured logging
 structlog.configure(
@@ -229,7 +230,7 @@ async def process_translation(
     source_lang: Language,
     target_lang: Language,
 ):
-    """Background task for translation processing."""
+    """Background task for translation processing with slide-based context."""
     logger.info(
         "translation_started",
         file_id=file_id,
@@ -254,18 +255,18 @@ async def process_translation(
         output_path = UPLOAD_DIR / f"{file_id}_translated.pptx"
 
         ppt_service = PPTService(str(file_path))
-        orchestrator = TranslationOrchestrator(api_key)
+        translator = TranslatorAgent(api_key)
 
-        # Extract texts
-        texts_data = ppt_service.get_all_texts()
-        unique_texts = list(dict.fromkeys(item["text"] for item in texts_data))  # Preserve order
-        total_texts = len(unique_texts)
+        # Extract texts grouped by slide for context-aware translation
+        texts_by_slide = ppt_service.get_texts_by_slide()
+        total_slides = ppt_service.get_slide_count()
+        slides_with_text = len(texts_by_slide)
 
-        if total_texts == 0:
+        if slides_with_text == 0:
             translation_status[file_id] = TranslationStatus(
                 status="completed",
                 progress=100,
-                total_slides=ppt_service.get_slide_count(),
+                total_slides=total_slides,
                 current_slide=0,
                 review_loop=0,
                 message="번역할 텍스트가 없습니다",
@@ -278,67 +279,73 @@ async def process_translation(
         translation_status[file_id] = TranslationStatus(
             status="processing",
             progress=0,
-            total_slides=ppt_service.get_slide_count(),
+            total_slides=total_slides,
             current_slide=0,
             review_loop=0,
-            message=f"{total_texts}개 텍스트 번역 시작...",
+            message=f"{slides_with_text}개 슬라이드 번역 시작...",
         )
 
-        # Translate each unique text
-        translations = {}
-        for idx, text in enumerate(unique_texts):
+        # Translate slide by slide for better context
+        all_translations = {}
+        processed_slides = 0
+
+        for slide_num, slide_texts in texts_by_slide.items():
+            processed_slides += 1
+
             # Update status
             translation_status[file_id] = TranslationStatus(
                 status="processing",
-                progress=int((idx / total_texts) * 95),
-                total_slides=ppt_service.get_slide_count(),
-                current_slide=idx + 1,
+                progress=int((processed_slides / slides_with_text) * 95),
+                total_slides=total_slides,
+                current_slide=slide_num,
                 review_loop=0,
-                message=f"텍스트 {idx + 1}/{total_texts} 번역 중...",
+                message=f"슬라이드 {slide_num}/{total_slides} 번역 중... ({len(slide_texts)}개 텍스트)",
             )
 
-            def update_review_status(iteration: int, message: str):
-                translation_status[file_id] = TranslationStatus(
-                    status="processing",
-                    progress=int((idx / total_texts) * 95),
-                    total_slides=ppt_service.get_slide_count(),
-                    current_slide=idx + 1,
-                    review_loop=iteration,
-                    message=f"텍스트 {idx + 1}/{total_texts}: 리뷰 {iteration}회차",
-                )
-
-            result = await orchestrator.translate_with_review(
-                text=text,
+            # Translate all texts in this slide together for context
+            slide_translations = await translator.translate_slide_batch(
+                texts=slide_texts,
                 source_lang=source_lang,
                 target_lang=target_lang,
-                progress_callback=update_review_status,
+                slide_number=slide_num,
             )
-            translations[text] = result.translated
+
+            # Merge translations
+            all_translations.update(slide_translations)
+
+            logger.info(
+                "slide_translated",
+                file_id=file_id,
+                slide_number=slide_num,
+                text_count=len(slide_texts),
+            )
 
         # Apply translations
         translation_status[file_id] = TranslationStatus(
             status="processing",
             progress=95,
-            total_slides=ppt_service.get_slide_count(),
-            current_slide=total_texts,
-            review_loop=1,
+            total_slides=total_slides,
+            current_slide=total_slides,
+            review_loop=0,
             message="번역 결과를 PPT에 적용 중...",
         )
 
-        ppt_service.apply_translations(translations, str(output_path))
+        ppt_service.apply_translations(all_translations, str(output_path))
 
+        total_texts = sum(len(texts) for texts in texts_by_slide.values())
         translation_status[file_id] = TranslationStatus(
             status="completed",
             progress=100,
-            total_slides=ppt_service.get_slide_count(),
-            current_slide=total_texts,
-            review_loop=1,
+            total_slides=total_slides,
+            current_slide=total_slides,
+            review_loop=0,
             message="번역이 완료되었습니다!",
         )
 
         logger.info(
             "translation_completed",
             file_id=file_id,
+            slides_translated=slides_with_text,
             texts_translated=total_texts,
         )
 

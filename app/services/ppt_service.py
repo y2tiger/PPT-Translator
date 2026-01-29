@@ -51,6 +51,23 @@ class PPTService:
         """Get all texts as a list."""
         return list(self.extract_texts())
 
+    def get_texts_by_slide(self) -> dict[int, list[str]]:
+        """Get texts grouped by slide number for context-aware translation."""
+        texts_by_slide: dict[int, list[str]] = {}
+
+        for item in self.extract_texts():
+            slide_num = item["slide_number"]
+            text = item["text"]
+
+            if slide_num not in texts_by_slide:
+                texts_by_slide[slide_num] = []
+
+            # Avoid duplicates within the same slide
+            if text not in texts_by_slide[slide_num]:
+                texts_by_slide[slide_num].append(text)
+
+        return texts_by_slide
+
     def get_slide_count(self) -> int:
         """Return the number of slides."""
         return len(self.presentation.slides)
