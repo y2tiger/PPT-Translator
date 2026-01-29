@@ -18,6 +18,7 @@ from app.services.ppt_service import PPTService
 from app.agents.orchestrator import TranslationOrchestrator
 from app.agents.translator import TranslatorAgent
 from app.agents.qa_agent import QAAgent
+from app.agents.diagnostic_agent import DiagnosticAgent, IssueSeverity
 
 # QA loop settings
 MAX_QA_ITERATIONS = 3
@@ -324,8 +325,9 @@ async def process_translation(
                 text_count=len(slide_texts),
             )
 
-        # QA Loop - Check and fix translation issues
-        qa_agent = QAAgent(api_key)
+        # Diagnostic & QA Loop - Analyze pipeline and fix issues
+        diagnostic_agent = DiagnosticAgent(api_key)
+        applied_texts = {text: False for texts in texts_by_slide.values() for text in texts}
 
         for qa_iteration in range(1, MAX_QA_ITERATIONS + 1):
             translation_status[file_id] = TranslationStatus(
@@ -334,55 +336,70 @@ async def process_translation(
                 total_slides=total_slides,
                 current_slide=total_slides,
                 review_loop=qa_iteration,
-                message=f"품질 검증 {qa_iteration}/{MAX_QA_ITERATIONS}회차...",
+                message=f"품질 진단 {qa_iteration}/{MAX_QA_ITERATIONS}회차...",
             )
 
-            # Run QA analysis
-            qa_result = await qa_agent.analyze_translations(
-                original_texts=texts_by_slide,
+            # Run diagnostic analysis
+            diagnostic_report = await diagnostic_agent.analyze_pipeline(
+                extracted_texts=texts_by_slide,
                 translations=all_translations,
+                applied_texts=applied_texts,
                 source_lang=source_lang,
                 target_lang=target_lang,
             )
 
             logger.info(
-                "qa_iteration_complete",
+                "diagnostic_iteration_complete",
                 file_id=file_id,
                 iteration=qa_iteration,
-                passed=qa_result.passed,
-                issues_count=len(qa_result.issues),
+                summary=diagnostic_report.summary,
+                translation_rate=f"{diagnostic_report.translation_rate:.1f}%",
+                issues_count=len(diagnostic_report.issues),
+                recommendations=diagnostic_report.recommendations,
             )
 
-            if qa_result.passed:
-                logger.info("qa_passed", file_id=file_id, iteration=qa_iteration)
+            # Check if we have critical issues to fix
+            critical_issues = [i for i in diagnostic_report.issues
+                              if i.severity in (IssueSeverity.CRITICAL, IssueSeverity.WARNING)]
+
+            if not critical_issues:
+                logger.info("diagnostic_passed", file_id=file_id, iteration=qa_iteration)
                 break
 
-            # Get fixes for issues
-            if qa_result.issues:
-                translation_status[file_id] = TranslationStatus(
-                    status="processing",
-                    progress=70 + (qa_iteration * 8) + 4,
-                    total_slides=total_slides,
-                    current_slide=total_slides,
-                    review_loop=qa_iteration,
-                    message=f"품질 검증 {qa_iteration}회차: {len(qa_result.issues)}개 문제 수정 중...",
-                )
+            # Get targeted fixes for issues
+            translation_status[file_id] = TranslationStatus(
+                status="processing",
+                progress=70 + (qa_iteration * 8) + 4,
+                total_slides=total_slides,
+                current_slide=total_slides,
+                review_loop=qa_iteration,
+                message=f"품질 진단 {qa_iteration}회차: {len(critical_issues)}개 문제 수정 중...",
+            )
 
-                fixes = await qa_agent.suggest_fixes(
-                    issues=qa_result.issues,
-                    source_lang=source_lang,
-                    target_lang=target_lang,
-                )
+            fixes = await diagnostic_agent.get_targeted_fixes(
+                issues=critical_issues,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
 
-                # Apply fixes to translations
-                if fixes:
-                    all_translations.update(fixes)
-                    logger.info(
-                        "fixes_applied",
-                        file_id=file_id,
-                        iteration=qa_iteration,
-                        fix_count=len(fixes),
-                    )
+            # Apply fixes to translations
+            if fixes:
+                all_translations.update(fixes)
+                logger.info(
+                    "diagnostic_fixes_applied",
+                    file_id=file_id,
+                    iteration=qa_iteration,
+                    fix_count=len(fixes),
+                )
+            else:
+                # No fixes available, break to avoid infinite loop
+                logger.warning(
+                    "no_fixes_available",
+                    file_id=file_id,
+                    iteration=qa_iteration,
+                    remaining_issues=len(critical_issues),
+                )
+                break
 
         # Apply translations
         translation_status[file_id] = TranslationStatus(
@@ -394,7 +411,17 @@ async def process_translation(
             message="번역 결과를 PPT에 적용 중...",
         )
 
-        ppt_service.apply_translations(all_translations, str(output_path))
+        _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
+
+        # Log final diagnostic summary
+        applied_count = sum(1 for v in applied_tracker.values() if v)
+        logger.info(
+            "final_application_summary",
+            file_id=file_id,
+            total_translations=len(all_translations),
+            applied=applied_count,
+            failed=len(applied_tracker) - applied_count,
+        )
 
         total_texts = sum(len(texts) for texts in texts_by_slide.values())
         translation_status[file_id] = TranslationStatus(

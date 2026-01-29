@@ -94,12 +94,18 @@ class PPTService:
         """Return the number of slides."""
         return len(self.presentation.slides)
 
-    def _apply_to_shape(self, shape, translations: dict[str, str], target_font: str = "Arial"):
+    def _apply_to_shape(
+        self,
+        shape,
+        translations: dict[str, str],
+        applied_tracker: dict[str, bool],
+        target_font: str = "Arial"
+    ):
         """Apply translations to a single shape at paragraph level."""
         # Handle group shapes recursively
         if isinstance(shape, GroupShape):
             for child_shape in shape.shapes:
-                self._apply_to_shape(child_shape, translations, target_font)
+                self._apply_to_shape(child_shape, translations, applied_tracker, target_font)
             return
 
         # Handle text frames - apply at PARAGRAPH level
@@ -127,6 +133,8 @@ class PPTService:
                         for run in paragraph.runs[1:]:
                             run.text = ""
                             run.font.name = target_font
+                        # Track successful application
+                        applied_tracker[para_text] = True
                 elif para_text:
                     # Log texts that weren't found in translations
                     logger.warning(
@@ -134,6 +142,7 @@ class PPTService:
                         text=para_text[:50],
                         shape_id=shape.shape_id,
                     )
+                    applied_tracker[para_text] = False
 
         # Handle tables - apply at cell/paragraph level
         if shape.has_table:
@@ -150,18 +159,39 @@ class PPTService:
                                     for run in para.runs[1:]:
                                         run.text = ""
                                         run.font.name = target_font
+                                    applied_tracker[para_text] = True
 
-    def apply_translations(self, translations: dict[str, str], output_path: str) -> str:
+    def apply_translations(
+        self,
+        translations: dict[str, str],
+        output_path: str
+    ) -> tuple[str, dict[str, bool]]:
         """
         Apply translations to the presentation.
 
         Args:
             translations: Dict mapping original text to translated text
             output_path: Path to save the translated presentation
+
+        Returns:
+            Tuple of (output_path, applied_tracker dict showing which texts were applied)
         """
+        applied_tracker: dict[str, bool] = {}
+
         for slide in self.presentation.slides:
             for shape in slide.shapes:
-                self._apply_to_shape(shape, translations)
+                self._apply_to_shape(shape, translations, applied_tracker)
 
         self.presentation.save(output_path)
-        return output_path
+
+        # Log application summary
+        applied_count = sum(1 for v in applied_tracker.values() if v)
+        failed_count = sum(1 for v in applied_tracker.values() if not v)
+        logger.info(
+            "translations_applied",
+            total=len(applied_tracker),
+            applied=applied_count,
+            failed=failed_count,
+        )
+
+        return output_path, applied_tracker
