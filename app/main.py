@@ -17,6 +17,10 @@ from app.models.schemas import Language, TranslationStatus, LANGUAGE_NAMES
 from app.services.ppt_service import PPTService
 from app.agents.orchestrator import TranslationOrchestrator
 from app.agents.translator import TranslatorAgent
+from app.agents.qa_agent import QAAgent
+
+# QA loop settings
+MAX_QA_ITERATIONS = 3
 
 # Configure structured logging
 structlog.configure(
@@ -295,7 +299,7 @@ async def process_translation(
             # Update status
             translation_status[file_id] = TranslationStatus(
                 status="processing",
-                progress=int((processed_slides / slides_with_text) * 95),
+                progress=int((processed_slides / slides_with_text) * 70),
                 total_slides=total_slides,
                 current_slide=slide_num,
                 review_loop=0,
@@ -319,6 +323,66 @@ async def process_translation(
                 slide_number=slide_num,
                 text_count=len(slide_texts),
             )
+
+        # QA Loop - Check and fix translation issues
+        qa_agent = QAAgent(api_key)
+
+        for qa_iteration in range(1, MAX_QA_ITERATIONS + 1):
+            translation_status[file_id] = TranslationStatus(
+                status="processing",
+                progress=70 + (qa_iteration * 8),
+                total_slides=total_slides,
+                current_slide=total_slides,
+                review_loop=qa_iteration,
+                message=f"품질 검증 {qa_iteration}/{MAX_QA_ITERATIONS}회차...",
+            )
+
+            # Run QA analysis
+            qa_result = await qa_agent.analyze_translations(
+                original_texts=texts_by_slide,
+                translations=all_translations,
+                source_lang=source_lang,
+                target_lang=target_lang,
+            )
+
+            logger.info(
+                "qa_iteration_complete",
+                file_id=file_id,
+                iteration=qa_iteration,
+                passed=qa_result.passed,
+                issues_count=len(qa_result.issues),
+            )
+
+            if qa_result.passed:
+                logger.info("qa_passed", file_id=file_id, iteration=qa_iteration)
+                break
+
+            # Get fixes for issues
+            if qa_result.issues:
+                translation_status[file_id] = TranslationStatus(
+                    status="processing",
+                    progress=70 + (qa_iteration * 8) + 4,
+                    total_slides=total_slides,
+                    current_slide=total_slides,
+                    review_loop=qa_iteration,
+                    message=f"품질 검증 {qa_iteration}회차: {len(qa_result.issues)}개 문제 수정 중...",
+                )
+
+                fixes = await qa_agent.suggest_fixes(
+                    issues=qa_result.issues,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                )
+
+                # Apply fixes to translations
+                if fixes:
+                    all_translations.update(fixes)
+                    logger.info(
+                        "fixes_applied",
+                        file_id=file_id,
+                        iteration=qa_iteration,
+                        fix_count=len(fixes),
+                    )
 
         # Apply translations
         translation_status[file_id] = TranslationStatus(
