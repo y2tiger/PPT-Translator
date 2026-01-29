@@ -11,16 +11,18 @@ class Language(str, Enum):
     SPANISH = "es"
     FRENCH = "fr"
     GERMAN = "de"
+    POLISH = "pl"
 
 
 LANGUAGE_NAMES = {
-    Language.KOREAN: "Korean",
+    Language.KOREAN: "한국어",
     Language.ENGLISH: "English",
-    Language.JAPANESE: "Japanese",
-    Language.CHINESE: "Chinese",
-    Language.SPANISH: "Spanish",
-    Language.FRENCH: "French",
-    Language.GERMAN: "German",
+    Language.JAPANESE: "日本語",
+    Language.CHINESE: "中文",
+    Language.SPANISH: "Español",
+    Language.FRENCH: "Français",
+    Language.GERMAN: "Deutsch",
+    Language.POLISH: "Polski",
 }
 
 
