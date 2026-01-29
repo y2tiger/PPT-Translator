@@ -55,12 +55,12 @@ class PPTService:
         """Return the number of slides."""
         return len(self.presentation.slides)
 
-    def _apply_to_shape(self, shape, translations: dict[str, str]):
+    def _apply_to_shape(self, shape, translations: dict[str, str], target_font: str = "Arial"):
         """Apply translations to a single shape, handling groups recursively."""
         # Handle group shapes recursively
         if isinstance(shape, GroupShape):
             for child_shape in shape.shapes:
-                self._apply_to_shape(child_shape, translations)
+                self._apply_to_shape(child_shape, translations, target_font)
             return
 
         # Handle text frames
@@ -69,6 +69,8 @@ class PPTService:
                 for run in paragraph.runs:
                     if run.text in translations:
                         run.text = translations[run.text]
+                        # Apply global font to avoid Korean font display issues
+                        run.font.name = target_font
 
         # Handle tables
         if shape.has_table:
@@ -79,6 +81,7 @@ class PPTService:
                             if para.text in translations:
                                 if para.runs:
                                     para.runs[0].text = translations[para.text]
+                                    para.runs[0].font.name = target_font
                                     for run in para.runs[1:]:
                                         run.text = ""
 
