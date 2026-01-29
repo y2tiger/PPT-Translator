@@ -1,6 +1,10 @@
+import structlog
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
+from pptx.enum.text import MSO_AUTO_SIZE
 from typing import Generator
+
+logger = structlog.get_logger(__name__)
 
 
 class PPTService:
@@ -67,6 +71,22 @@ class PPTService:
             # Avoid duplicates within the same slide
             if text not in texts_by_slide[slide_num]:
                 texts_by_slide[slide_num].append(text)
+                # Debug: log each extracted text
+                logger.debug(
+                    "text_extracted",
+                    slide=slide_num,
+                    shape_id=item.get("shape_id"),
+                    text_preview=text[:50] if len(text) > 50 else text,
+                    is_table=item.get("is_table", False),
+                )
+
+        # Log summary
+        total_texts = sum(len(texts) for texts in texts_by_slide.values())
+        logger.info(
+            "extraction_complete",
+            total_slides=len(texts_by_slide),
+            total_texts=total_texts,
+        )
 
         return texts_by_slide
 
@@ -84,10 +104,21 @@ class PPTService:
 
         # Handle text frames - apply at PARAGRAPH level
         if shape.has_text_frame:
+            # Enable auto-fit for text to shrink if needed
+            try:
+                shape.text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+            except Exception:
+                pass  # Some shapes don't support auto_size
+
             for paragraph in shape.text_frame.paragraphs:
                 para_text = paragraph.text.strip()
                 if para_text in translations:
                     translated = translations[para_text]
+                    logger.debug(
+                        "translation_applied",
+                        original=para_text[:30],
+                        translated=translated[:30],
+                    )
                     # Put all translated text in first run, clear others
                     if paragraph.runs:
                         paragraph.runs[0].text = translated
@@ -96,6 +127,13 @@ class PPTService:
                         for run in paragraph.runs[1:]:
                             run.text = ""
                             run.font.name = target_font
+                elif para_text:
+                    # Log texts that weren't found in translations
+                    logger.warning(
+                        "translation_not_found",
+                        text=para_text[:50],
+                        shape_id=shape.shape_id,
+                    )
 
         # Handle tables - apply at cell/paragraph level
         if shape.has_table:

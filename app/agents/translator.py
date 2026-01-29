@@ -184,17 +184,20 @@ These texts are all from the same presentation slide, so maintain consistency in
 CRITICAL RULES:
 1. Return ONLY a JSON object mapping the number to the translation
 2. Keep brand names, company names, or acronyms (e.g., "SL", "IBM") unchanged
-3. Maintain the same length/brevity as the original when possible
+3. **KEEP TRANSLATIONS CONCISE** - Use abbreviations and shorter synonyms when possible
+   - Translations should be similar length to the original text
+   - For presentation slides, brevity is essential
 4. Never add explanations, apologies, or comments
 5. If a text is already in the target language, return it unchanged
 
 Example input:
 [1] 안녕하세요
 [2] SL 회사
-[3] 제품 품질
+[3] 중급
+[4] 생산기술학교
 
 Example output:
-{{"1": "Dzień dobry", "2": "SL Firma", "3": "Jakość produktu"}}
+{{"1": "Dzień dobry", "2": "SL Firma", "3": "Średni", "4": "Szkoła Techn. Prod."}}
 
 Now translate:"""
 
