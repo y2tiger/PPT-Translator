@@ -390,7 +390,7 @@ function clearActivityLog() {
 }
 
 // Show result (XSS-safe)
-function showResult(status) {
+async function showResult(status) {
     progressSection.classList.add('hidden');
     resultSection.classList.remove('hidden');
 
@@ -400,7 +400,180 @@ function showResult(status) {
     const slideInfo = document.createElement('p');
     slideInfo.textContent = `총 슬라이드: ${status.total_slides || 0}개`;
 
+    // Extract score from message if present
+    const scoreMatch = status.message?.match(/품질 점수: (\d+)\/100/);
+    if (scoreMatch) {
+        const scoreInfo = document.createElement('p');
+        scoreInfo.textContent = `품질 점수: ${scoreMatch[1]}/100`;
+        scoreInfo.className = 'quality-score';
+        stats.appendChild(scoreInfo);
+    }
+
     stats.appendChild(slideInfo);
+
+    // Load and display QA history
+    await loadQAHistory();
+}
+
+// Load and display QA history
+async function loadQAHistory() {
+    if (!currentFileId) return;
+
+    const qaSection = document.getElementById('qa-section');
+    const qaIterations = document.getElementById('qa-iterations');
+
+    try {
+        const response = await fetch(`/api/qa-history/${currentFileId}`);
+        if (!response.ok) {
+            // No QA history available
+            qaSection.classList.add('hidden');
+            return;
+        }
+
+        const data = await response.json();
+
+        if (!data.iterations || data.iterations.length === 0) {
+            qaSection.classList.add('hidden');
+            return;
+        }
+
+        // Clear existing content
+        qaIterations.innerHTML = '';
+
+        // Display each iteration
+        data.iterations.forEach(iteration => {
+            const iterDiv = document.createElement('div');
+            iterDiv.className = 'qa-iteration';
+
+            // Iteration header
+            const header = document.createElement('div');
+            header.className = 'qa-iteration-header';
+            header.innerHTML = `
+                <h3>검증 ${iteration.iteration}회차</h3>
+                <span class="qa-score ${iteration.overall_score >= 85 ? 'good' : 'needs-work'}">
+                    점수: ${iteration.overall_score}/100
+                </span>
+            `;
+            iterDiv.appendChild(header);
+
+            // Issues summary
+            if (iteration.critical_issues_count > 0 || iteration.texts_retranslated > 0) {
+                const summary = document.createElement('div');
+                summary.className = 'qa-summary';
+                summary.textContent = `발견된 문제: ${iteration.critical_issues_count}개, 재번역: ${iteration.texts_retranslated}개`;
+                iterDiv.appendChild(summary);
+            }
+
+            // Algorithm improvements
+            if (iteration.algorithm_improvements && iteration.algorithm_improvements.length > 0) {
+                const improvements = document.createElement('div');
+                improvements.className = 'qa-improvements';
+                improvements.innerHTML = '<strong>개선 제안:</strong>';
+                const list = document.createElement('ul');
+                iteration.algorithm_improvements.forEach(imp => {
+                    const li = document.createElement('li');
+                    li.textContent = imp;
+                    list.appendChild(li);
+                });
+                improvements.appendChild(list);
+                iterDiv.appendChild(improvements);
+            }
+
+            // Slide comparisons
+            if (iteration.slide_comparisons && iteration.slide_comparisons.length > 0) {
+                const slidesDiv = document.createElement('div');
+                slidesDiv.className = 'qa-slides';
+
+                iteration.slide_comparisons.forEach(slide => {
+                    const slideDiv = document.createElement('div');
+                    slideDiv.className = 'qa-slide-comparison';
+
+                    // Slide header
+                    const slideHeader = document.createElement('div');
+                    slideHeader.className = 'slide-header';
+                    slideHeader.innerHTML = `
+                        <span>슬라이드 ${slide.slide_number}</span>
+                        <span class="slide-score ${slide.quality_score >= 85 ? 'good' : 'needs-work'}">
+                            ${slide.quality_score}/100
+                        </span>
+                    `;
+                    slideDiv.appendChild(slideHeader);
+
+                    // Images container
+                    const imagesDiv = document.createElement('div');
+                    imagesDiv.className = 'slide-images';
+
+                    // Original image
+                    const origContainer = document.createElement('div');
+                    origContainer.className = 'image-container';
+                    origContainer.innerHTML = `
+                        <span class="image-label">원본</span>
+                        <img src="${slide.original_image_url}" alt="원본 슬라이드 ${slide.slide_number}" loading="lazy">
+                    `;
+
+                    // Translated image
+                    const transContainer = document.createElement('div');
+                    transContainer.className = 'image-container';
+                    transContainer.innerHTML = `
+                        <span class="image-label">번역</span>
+                        <img src="${slide.translated_image_url}" alt="번역된 슬라이드 ${slide.slide_number}" loading="lazy">
+                    `;
+
+                    imagesDiv.appendChild(origContainer);
+                    imagesDiv.appendChild(transContainer);
+                    slideDiv.appendChild(imagesDiv);
+
+                    // Issues for this slide
+                    if (slide.issues && slide.issues.length > 0) {
+                        const issuesDiv = document.createElement('div');
+                        issuesDiv.className = 'slide-issues';
+                        slide.issues.forEach(issue => {
+                            const issueDiv = document.createElement('div');
+                            issueDiv.className = `issue ${issue.severity}`;
+                            issueDiv.innerHTML = `
+                                <span class="issue-type">${getIssueTypeLabel(issue.issue_type)}</span>
+                                <span class="issue-text">${escapeHtml(issue.original_text)}</span>
+                                <span class="issue-desc">${escapeHtml(issue.description)}</span>
+                            `;
+                            issuesDiv.appendChild(issueDiv);
+                        });
+                        slideDiv.appendChild(issuesDiv);
+                    }
+
+                    slidesDiv.appendChild(slideDiv);
+                });
+
+                iterDiv.appendChild(slidesDiv);
+            }
+
+            qaIterations.appendChild(iterDiv);
+        });
+
+        qaSection.classList.remove('hidden');
+
+    } catch (error) {
+        console.error('Failed to load QA history:', error);
+        qaSection.classList.add('hidden');
+    }
+}
+
+// Helper function to get issue type label
+function getIssueTypeLabel(type) {
+    const labels = {
+        'untranslated': '미번역',
+        'overflow': '텍스트 넘침',
+        'layout': '레이아웃 문제',
+        'missing': '텍스트 누락',
+    };
+    return labels[type] || type;
+}
+
+// Helper function to escape HTML
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 // Download file
@@ -433,6 +606,13 @@ function resetForm() {
     progressSection.classList.add('hidden');
     resultSection.classList.add('hidden');
     errorSection.classList.add('hidden');
+
+    // Hide and clear QA section
+    const qaSection = document.getElementById('qa-section');
+    if (qaSection) {
+        qaSection.classList.add('hidden');
+        document.getElementById('qa-iterations').innerHTML = '';
+    }
 
     resetUploadArea();
     sourceLangSelect.value = 'en';

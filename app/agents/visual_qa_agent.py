@@ -1,5 +1,6 @@
 import base64
 import json
+import shutil
 import subprocess
 import tempfile
 import structlog
@@ -25,6 +26,17 @@ class VisualIssue:
 
 
 @dataclass
+class SlideComparison:
+    """Comparison data for a single slide."""
+    slide_number: int
+    original_image_path: str = ""
+    translated_image_path: str = ""
+    issues: list[VisualIssue] = field(default_factory=list)
+    quality_score: int = 0
+    algorithm_suggestions: list[str] = field(default_factory=list)
+
+
+@dataclass
 class VisualComparisonResult:
     """Result of visual comparison between original and translated slides."""
     slide_number: int
@@ -36,8 +48,10 @@ class VisualComparisonResult:
 @dataclass
 class VisualQAReport:
     """Complete visual QA report."""
-    total_slides: int
+    iteration: int = 0
+    total_slides: int = 0
     comparisons: list[VisualComparisonResult] = field(default_factory=list)
+    slide_comparisons: list[SlideComparison] = field(default_factory=list)
     overall_score: int = 0
     critical_issues: list[VisualIssue] = field(default_factory=list)
     algorithm_improvements: list[str] = field(default_factory=list)
@@ -225,6 +239,8 @@ Return as JSON:
         source_lang: Language,
         target_lang: Language,
         max_slides: int = 10,  # Limit for cost control
+        iteration: int = 1,
+        output_dir: Path | None = None,  # Directory to save images for UI
     ) -> VisualQAReport:
         """
         Compare original and translated presentations visually.
@@ -235,6 +251,8 @@ Return as JSON:
             source_lang: Source language
             target_lang: Target language
             max_slides: Maximum slides to compare (for cost control)
+            iteration: Current iteration number
+            output_dir: Directory to save comparison images (for UI display)
 
         Returns:
             VisualQAReport with issues and improvement suggestions
@@ -265,6 +283,12 @@ Return as JSON:
 
             num_slides = min(len(original_images), len(translated_images), max_slides)
 
+            # Create iteration directory for saving images if output_dir provided
+            slide_comparisons = []
+            if output_dir:
+                iter_dir = output_dir / f"iteration_{iteration}"
+                iter_dir.mkdir(parents=True, exist_ok=True)
+
             for i in range(num_slides):
                 logger.info("comparing_slide", slide=i+1, total=num_slides)
 
@@ -280,6 +304,28 @@ Return as JSON:
                 all_issues.extend(comparison.issues)
                 all_suggestions.extend(comparison.algorithm_suggestions)
                 total_score += comparison.quality_score
+
+                # Save images and create slide comparison
+                original_image_path = ""
+                translated_image_path = ""
+
+                if output_dir:
+                    # Copy images to persistent location
+                    orig_dest = iter_dir / f"slide_{i+1}_original.png"
+                    trans_dest = iter_dir / f"slide_{i+1}_translated.png"
+                    shutil.copy(original_images[i], orig_dest)
+                    shutil.copy(translated_images[i], trans_dest)
+                    original_image_path = str(orig_dest)
+                    translated_image_path = str(trans_dest)
+
+                slide_comparisons.append(SlideComparison(
+                    slide_number=i + 1,
+                    original_image_path=original_image_path,
+                    translated_image_path=translated_image_path,
+                    issues=comparison.issues,
+                    quality_score=comparison.quality_score,
+                    algorithm_suggestions=comparison.algorithm_suggestions,
+                ))
 
             # Calculate overall score
             overall_score = total_score // num_slides if num_slides > 0 else 0
@@ -297,8 +343,10 @@ Return as JSON:
             unique_suggestions = list(set(all_suggestions))
 
             report = VisualQAReport(
+                iteration=iteration,
                 total_slides=num_slides,
                 comparisons=comparisons,
+                slide_comparisons=slide_comparisons,
                 overall_score=overall_score,
                 critical_issues=critical_issues,
                 algorithm_improvements=unique_suggestions,
@@ -307,6 +355,7 @@ Return as JSON:
 
             logger.info(
                 "visual_qa_complete",
+                iteration=iteration,
                 total_slides=num_slides,
                 overall_score=overall_score,
                 critical_issues=len(critical_issues),

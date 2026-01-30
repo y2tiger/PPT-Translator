@@ -61,3 +61,37 @@ class TranslationStatus(BaseModel):
     current_slide: int
     review_loop: int
     message: str
+
+
+class VisualIssueResponse(BaseModel):
+    slide_number: int
+    issue_type: str
+    description: str
+    original_text: str
+    suggestion: str
+    severity: str
+
+
+class SlideComparisonResponse(BaseModel):
+    slide_number: int
+    original_image_url: str
+    translated_image_url: str
+    issues: list[VisualIssueResponse]
+    quality_score: int
+    suggestions: list[str]
+
+
+class QAIterationResponse(BaseModel):
+    iteration: int
+    overall_score: int
+    total_slides: int
+    critical_issues_count: int
+    texts_retranslated: int
+    algorithm_improvements: list[str]
+    slide_comparisons: list[SlideComparisonResponse]
+
+
+class QAHistoryResponse(BaseModel):
+    file_id: str
+    iterations: list[QAIterationResponse]
+    final_score: int

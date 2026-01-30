@@ -13,7 +13,10 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from app.models.schemas import Language, TranslationStatus, LANGUAGE_NAMES
+from app.models.schemas import (
+    Language, TranslationStatus, LANGUAGE_NAMES,
+    QAHistoryResponse, QAIterationResponse, SlideComparisonResponse, VisualIssueResponse
+)
 from app.services.ppt_service import PPTService
 from app.agents.orchestrator import TranslationOrchestrator
 from app.agents.translator import TranslatorAgent
@@ -99,6 +102,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # In-memory status tracking (for single instance)
 translation_status: dict[str, TranslationStatus] = {}
+qa_history: dict[str, list[QAIterationResponse]] = {}  # Store QA iterations per file
 
 
 def validate_file_id(file_id: str) -> str:
@@ -408,6 +412,13 @@ async def process_translation(
         visual_qa_agent = VisualQAAgent(api_key)
         best_score = 0
 
+        # Create directory for QA images
+        qa_images_dir = UPLOAD_DIR / f"{file_id}_qa"
+        qa_images_dir.mkdir(exist_ok=True)
+
+        # Initialize QA history for this file
+        qa_history[file_id] = []
+
         for visual_iteration in range(1, MAX_VISUAL_ITERATIONS + 1):
             # Apply current translations
             translation_status[file_id] = TranslationStatus(
@@ -440,6 +451,8 @@ async def process_translation(
                     source_lang=source_lang,
                     target_lang=target_lang,
                     max_slides=min(10, total_slides),  # Limit for cost
+                    iteration=visual_iteration,
+                    output_dir=qa_images_dir,
                 )
 
                 logger.info(
@@ -450,6 +463,45 @@ async def process_translation(
                     critical_issues=len(visual_report.critical_issues),
                     improvements=visual_report.algorithm_improvements,
                 )
+
+                # Store QA iteration for UI display
+                slide_comparisons_response = []
+                for sc in visual_report.slide_comparisons:
+                    # Convert file paths to URLs
+                    orig_url = f"/api/qa-image/{file_id}/{visual_iteration}/{sc.slide_number}/original"
+                    trans_url = f"/api/qa-image/{file_id}/{visual_iteration}/{sc.slide_number}/translated"
+
+                    issues_response = [
+                        VisualIssueResponse(
+                            slide_number=issue.slide_number,
+                            issue_type=issue.issue_type,
+                            description=issue.description,
+                            original_text=issue.original_text,
+                            suggestion=issue.suggestion,
+                            severity=issue.severity,
+                        )
+                        for issue in sc.issues
+                    ]
+
+                    slide_comparisons_response.append(SlideComparisonResponse(
+                        slide_number=sc.slide_number,
+                        original_image_url=orig_url,
+                        translated_image_url=trans_url,
+                        issues=issues_response,
+                        quality_score=sc.quality_score,
+                        suggestions=sc.algorithm_suggestions,
+                    ))
+
+                qa_iteration_response = QAIterationResponse(
+                    iteration=visual_iteration,
+                    overall_score=visual_report.overall_score,
+                    total_slides=visual_report.total_slides,
+                    critical_issues_count=len(visual_report.critical_issues),
+                    texts_retranslated=len(visual_report.texts_to_retranslate),
+                    algorithm_improvements=visual_report.algorithm_improvements,
+                    slide_comparisons=slide_comparisons_response,
+                )
+                qa_history[file_id].append(qa_iteration_response)
 
                 best_score = max(best_score, visual_report.overall_score)
 
@@ -642,6 +694,41 @@ async def download_file(file_id: str):
     )
 
 
+@app.get("/api/qa-history/{file_id}")
+async def get_qa_history(file_id: str):
+    """Get QA iteration history for a file."""
+    file_id = validate_file_id(file_id)
+
+    if file_id not in qa_history:
+        raise HTTPException(status_code=404, detail="QA 기록을 찾을 수 없습니다")
+
+    iterations = qa_history[file_id]
+    final_score = iterations[-1].overall_score if iterations else 0
+
+    return QAHistoryResponse(
+        file_id=file_id,
+        iterations=iterations,
+        final_score=final_score,
+    )
+
+
+@app.get("/api/qa-image/{file_id}/{iteration}/{slide_number}/{image_type}")
+async def get_qa_image(file_id: str, iteration: int, slide_number: int, image_type: str):
+    """Get a QA comparison image."""
+    file_id = validate_file_id(file_id)
+
+    if image_type not in ("original", "translated"):
+        raise HTTPException(status_code=400, detail="Invalid image type")
+
+    qa_dir = UPLOAD_DIR / f"{file_id}_qa" / f"iteration_{iteration}"
+    image_path = qa_dir / f"slide_{slide_number}_{image_type}.png"
+
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="이미지를 찾을 수 없습니다")
+
+    return FileResponse(path=image_path, media_type="image/png")
+
+
 @app.delete("/api/file/{file_id}")
 async def delete_file(file_id: str):
     """Delete uploaded and translated files."""
@@ -649,14 +736,20 @@ async def delete_file(file_id: str):
 
     file_path = UPLOAD_DIR / f"{file_id}.pptx"
     output_path = UPLOAD_DIR / f"{file_id}_translated.pptx"
+    qa_dir = UPLOAD_DIR / f"{file_id}_qa"
 
     if file_path.exists():
         file_path.unlink()
     if output_path.exists():
         output_path.unlink()
+    if qa_dir.exists():
+        import shutil
+        shutil.rmtree(qa_dir)
 
     if file_id in translation_status:
         del translation_status[file_id]
+    if file_id in qa_history:
+        del qa_history[file_id]
 
     logger.info("files_deleted", file_id=file_id)
     return {"message": "파일이 삭제되었습니다"}
