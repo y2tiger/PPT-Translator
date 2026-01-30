@@ -19,9 +19,12 @@ from app.agents.orchestrator import TranslationOrchestrator
 from app.agents.translator import TranslatorAgent
 from app.agents.qa_agent import QAAgent
 from app.agents.diagnostic_agent import DiagnosticAgent, IssueSeverity
+from app.agents.visual_qa_agent import VisualQAAgent
 
 # QA loop settings
 MAX_QA_ITERATIONS = 3
+MAX_VISUAL_ITERATIONS = 5  # Visual comparison iterations
+VISUAL_QA_QUALITY_THRESHOLD = 85  # Score threshold to pass
 
 # Configure structured logging
 structlog.configure(
@@ -401,19 +404,127 @@ async def process_translation(
                 )
                 break
 
-        # Apply translations
+        # Visual QA Loop - Compare images and iteratively improve
+        visual_qa_agent = VisualQAAgent(api_key)
+        best_score = 0
+
+        for visual_iteration in range(1, MAX_VISUAL_ITERATIONS + 1):
+            # Apply current translations
+            translation_status[file_id] = TranslationStatus(
+                status="processing",
+                progress=70 + (visual_iteration * 5),
+                total_slides=total_slides,
+                current_slide=total_slides,
+                review_loop=visual_iteration,
+                message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: PPT 생성 중...",
+            )
+
+            # Re-create PPT service for fresh state
+            ppt_service = PPTService(str(file_path))
+            _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
+
+            # Visual comparison
+            translation_status[file_id] = TranslationStatus(
+                status="processing",
+                progress=70 + (visual_iteration * 5) + 2,
+                total_slides=total_slides,
+                current_slide=total_slides,
+                review_loop=visual_iteration,
+                message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: 이미지 비교 중...",
+            )
+
+            try:
+                visual_report = await visual_qa_agent.compare_presentations(
+                    original_ppt_path=str(file_path),
+                    translated_ppt_path=str(output_path),
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    max_slides=min(10, total_slides),  # Limit for cost
+                )
+
+                logger.info(
+                    "visual_qa_iteration",
+                    file_id=file_id,
+                    iteration=visual_iteration,
+                    score=visual_report.overall_score,
+                    critical_issues=len(visual_report.critical_issues),
+                    improvements=visual_report.algorithm_improvements,
+                )
+
+                best_score = max(best_score, visual_report.overall_score)
+
+                # Check if quality is good enough
+                if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD:
+                    logger.info(
+                        "visual_qa_passed",
+                        file_id=file_id,
+                        iteration=visual_iteration,
+                        score=visual_report.overall_score,
+                    )
+                    break
+
+                # Get retranslations for problematic texts
+                if visual_report.texts_to_retranslate:
+                    translation_status[file_id] = TranslationStatus(
+                        status="processing",
+                        progress=70 + (visual_iteration * 5) + 4,
+                        total_slides=total_slides,
+                        current_slide=total_slides,
+                        review_loop=visual_iteration,
+                        message=f"시각적 품질 검증 {visual_iteration}회차: {len(visual_report.texts_to_retranslate)}개 텍스트 재번역 중...",
+                    )
+
+                    retranslations = await visual_qa_agent.get_retranslations(
+                        texts=visual_report.texts_to_retranslate,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                    )
+
+                    if retranslations:
+                        all_translations.update(retranslations)
+                        logger.info(
+                            "visual_retranslations_applied",
+                            file_id=file_id,
+                            iteration=visual_iteration,
+                            count=len(retranslations),
+                        )
+                    else:
+                        # No improvements possible
+                        logger.warning(
+                            "no_visual_improvements",
+                            file_id=file_id,
+                            iteration=visual_iteration,
+                        )
+                        break
+                else:
+                    # No texts to retranslate, we're done
+                    break
+
+            except Exception as visual_error:
+                logger.warning(
+                    "visual_qa_skipped",
+                    file_id=file_id,
+                    iteration=visual_iteration,
+                    error=str(visual_error),
+                )
+                # Continue without visual QA if it fails (e.g., LibreOffice not installed)
+                break
+
+        # Final application
         translation_status[file_id] = TranslationStatus(
             status="processing",
             progress=95,
             total_slides=total_slides,
             current_slide=total_slides,
             review_loop=0,
-            message="번역 결과를 PPT에 적용 중...",
+            message="최종 번역 결과 적용 중...",
         )
 
+        # Apply final translations
+        ppt_service = PPTService(str(file_path))
         _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
 
-        # Log final diagnostic summary
+        # Log final summary
         applied_count = sum(1 for v in applied_tracker.values() if v)
         logger.info(
             "final_application_summary",
@@ -421,6 +532,7 @@ async def process_translation(
             total_translations=len(all_translations),
             applied=applied_count,
             failed=len(applied_tracker) - applied_count,
+            visual_score=best_score,
         )
 
         total_texts = sum(len(texts) for texts in texts_by_slide.values())
@@ -430,7 +542,7 @@ async def process_translation(
             total_slides=total_slides,
             current_slide=total_slides,
             review_loop=0,
-            message="번역이 완료되었습니다!",
+            message=f"번역 완료! (품질 점수: {best_score}/100)",
         )
 
         logger.info(
@@ -438,6 +550,7 @@ async def process_translation(
             file_id=file_id,
             slides_translated=slides_with_text,
             texts_translated=total_texts,
+            visual_quality_score=best_score,
         )
 
     except Exception as e:

@@ -1,0 +1,375 @@
+import base64
+import json
+import subprocess
+import tempfile
+import structlog
+from pathlib import Path
+from dataclasses import dataclass, field
+import openai
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
+from app.models.schemas import Language, LANGUAGE_NAMES
+
+logger = structlog.get_logger(__name__)
+
+
+@dataclass
+class VisualIssue:
+    """Visual issue found by comparing slides."""
+    slide_number: int
+    issue_type: str  # "untranslated", "overflow", "layout", "missing"
+    description: str
+    original_text: str
+    suggestion: str
+    severity: str = "warning"  # "critical", "warning", "info"
+
+
+@dataclass
+class VisualComparisonResult:
+    """Result of visual comparison between original and translated slides."""
+    slide_number: int
+    issues: list[VisualIssue] = field(default_factory=list)
+    quality_score: int = 0  # 0-100
+    algorithm_suggestions: list[str] = field(default_factory=list)
+
+
+@dataclass
+class VisualQAReport:
+    """Complete visual QA report."""
+    total_slides: int
+    comparisons: list[VisualComparisonResult] = field(default_factory=list)
+    overall_score: int = 0
+    critical_issues: list[VisualIssue] = field(default_factory=list)
+    algorithm_improvements: list[str] = field(default_factory=list)
+    texts_to_retranslate: list[str] = field(default_factory=list)
+
+
+class VisualQAAgent:
+    """Agent for visual comparison of original and translated PPT slides."""
+
+    def __init__(self, api_key: str, model: str = "gpt-4o"):
+        self.client = openai.AsyncOpenAI(api_key=api_key)
+        self.model = model
+
+    def _ppt_to_images(self, ppt_path: str, output_dir: Path) -> list[Path]:
+        """Convert PPT to images using LibreOffice."""
+        try:
+            # First convert PPT to PDF using LibreOffice
+            pdf_path = output_dir / "slides.pdf"
+
+            subprocess.run([
+                "libreoffice", "--headless", "--convert-to", "pdf",
+                "--outdir", str(output_dir), str(ppt_path)
+            ], check=True, capture_output=True, timeout=120)
+
+            # Find the generated PDF
+            ppt_name = Path(ppt_path).stem
+            pdf_file = output_dir / f"{ppt_name}.pdf"
+
+            if not pdf_file.exists():
+                logger.error("pdf_conversion_failed", ppt_path=ppt_path)
+                return []
+
+            # Convert PDF to images using pdftoppm (from poppler-utils)
+            subprocess.run([
+                "pdftoppm", "-png", "-r", "150",
+                str(pdf_file), str(output_dir / "slide")
+            ], check=True, capture_output=True, timeout=120)
+
+            # Collect generated images
+            images = sorted(output_dir.glob("slide-*.png"))
+            logger.info("ppt_converted_to_images", count=len(images))
+            return images
+
+        except subprocess.TimeoutExpired:
+            logger.error("conversion_timeout", ppt_path=ppt_path)
+            return []
+        except subprocess.CalledProcessError as e:
+            logger.error("conversion_failed", error=e.stderr.decode() if e.stderr else str(e))
+            return []
+        except Exception as e:
+            logger.error("conversion_error", error=str(e))
+            return []
+
+    def _image_to_base64(self, image_path: Path) -> str:
+        """Convert image to base64 string."""
+        with open(image_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(
+            (openai.RateLimitError, openai.APIConnectionError)
+        ),
+    )
+    async def _compare_slides_vision(
+        self,
+        original_image: Path,
+        translated_image: Path,
+        slide_number: int,
+        source_lang: Language,
+        target_lang: Language,
+    ) -> VisualComparisonResult:
+        """Use GPT-4o Vision to compare original and translated slides."""
+
+        original_b64 = self._image_to_base64(original_image)
+        translated_b64 = self._image_to_base64(translated_image)
+
+        source_name = LANGUAGE_NAMES[source_lang]
+        target_name = LANGUAGE_NAMES[target_lang]
+
+        prompt = f"""Compare these two presentation slides. The first is the ORIGINAL in {source_name}, the second is the TRANSLATED version in {target_name}.
+
+Analyze and identify:
+1. **Untranslated text**: Any {source_name} text that remains in the translated version
+2. **Text overflow**: Text that is cut off or extends beyond its container
+3. **Layout issues**: Text positioning problems, overlapping, or misalignment
+4. **Missing text**: Text present in original but completely missing in translation
+
+For each issue found, provide:
+- The original text (if visible)
+- Description of the problem
+- Suggested fix
+
+Also provide:
+- Overall quality score (0-100)
+- Algorithm improvement suggestions (e.g., "need to handle grouped shapes", "font size should be reduced for long translations")
+
+Return as JSON:
+{{
+  "quality_score": 85,
+  "issues": [
+    {{
+      "type": "untranslated",
+      "original_text": "생산기술학교",
+      "description": "Korean text not translated",
+      "suggestion": "Force translate this text"
+    }}
+  ],
+  "algorithm_suggestions": [
+    "Reduce font size when translation is longer than original",
+    "Check for text in grouped shapes"
+  ]
+}}"""
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=2000,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{original_b64}",
+                                    "detail": "high"
+                                }
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{translated_b64}",
+                                    "detail": "high"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            )
+
+            result_text = response.choices[0].message.content.strip()
+
+            # Extract JSON from response
+            if "```" in result_text:
+                import re
+                json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', result_text)
+                if json_match:
+                    result_text = json_match.group(1)
+
+            result = json.loads(result_text)
+
+            # Build comparison result
+            issues = []
+            for issue_data in result.get("issues", []):
+                issues.append(VisualIssue(
+                    slide_number=slide_number,
+                    issue_type=issue_data.get("type", "unknown"),
+                    description=issue_data.get("description", ""),
+                    original_text=issue_data.get("original_text", ""),
+                    suggestion=issue_data.get("suggestion", ""),
+                    severity="critical" if issue_data.get("type") == "untranslated" else "warning"
+                ))
+
+            return VisualComparisonResult(
+                slide_number=slide_number,
+                issues=issues,
+                quality_score=result.get("quality_score", 50),
+                algorithm_suggestions=result.get("algorithm_suggestions", [])
+            )
+
+        except json.JSONDecodeError as e:
+            logger.error("vision_json_parse_error", slide=slide_number, error=str(e))
+            return VisualComparisonResult(slide_number=slide_number, quality_score=50)
+        except Exception as e:
+            logger.error("vision_comparison_failed", slide=slide_number, error=str(e))
+            return VisualComparisonResult(slide_number=slide_number, quality_score=50)
+
+    async def compare_presentations(
+        self,
+        original_ppt_path: str,
+        translated_ppt_path: str,
+        source_lang: Language,
+        target_lang: Language,
+        max_slides: int = 10,  # Limit for cost control
+    ) -> VisualQAReport:
+        """
+        Compare original and translated presentations visually.
+
+        Args:
+            original_ppt_path: Path to original PPT
+            translated_ppt_path: Path to translated PPT
+            source_lang: Source language
+            target_lang: Target language
+            max_slides: Maximum slides to compare (for cost control)
+
+        Returns:
+            VisualQAReport with issues and improvement suggestions
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            original_dir = tmpdir_path / "original"
+            translated_dir = tmpdir_path / "translated"
+            original_dir.mkdir()
+            translated_dir.mkdir()
+
+            # Convert both PPTs to images
+            logger.info("converting_original_ppt")
+            original_images = self._ppt_to_images(original_ppt_path, original_dir)
+
+            logger.info("converting_translated_ppt")
+            translated_images = self._ppt_to_images(translated_ppt_path, translated_dir)
+
+            if not original_images or not translated_images:
+                logger.error("image_conversion_failed")
+                return VisualQAReport(total_slides=0)
+
+            # Compare slides
+            comparisons = []
+            all_issues = []
+            all_suggestions = []
+            total_score = 0
+
+            num_slides = min(len(original_images), len(translated_images), max_slides)
+
+            for i in range(num_slides):
+                logger.info("comparing_slide", slide=i+1, total=num_slides)
+
+                comparison = await self._compare_slides_vision(
+                    original_images[i],
+                    translated_images[i],
+                    slide_number=i + 1,
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                )
+
+                comparisons.append(comparison)
+                all_issues.extend(comparison.issues)
+                all_suggestions.extend(comparison.algorithm_suggestions)
+                total_score += comparison.quality_score
+
+            # Calculate overall score
+            overall_score = total_score // num_slides if num_slides > 0 else 0
+
+            # Extract critical issues
+            critical_issues = [i for i in all_issues if i.severity == "critical"]
+
+            # Extract texts to retranslate
+            texts_to_retranslate = [
+                i.original_text for i in all_issues
+                if i.issue_type == "untranslated" and i.original_text
+            ]
+
+            # Deduplicate suggestions
+            unique_suggestions = list(set(all_suggestions))
+
+            report = VisualQAReport(
+                total_slides=num_slides,
+                comparisons=comparisons,
+                overall_score=overall_score,
+                critical_issues=critical_issues,
+                algorithm_improvements=unique_suggestions,
+                texts_to_retranslate=texts_to_retranslate,
+            )
+
+            logger.info(
+                "visual_qa_complete",
+                total_slides=num_slides,
+                overall_score=overall_score,
+                critical_issues=len(critical_issues),
+                suggestions=len(unique_suggestions),
+            )
+
+            return report
+
+    async def get_retranslations(
+        self,
+        texts: list[str],
+        source_lang: Language,
+        target_lang: Language,
+        context: str = "",
+    ) -> dict[str, str]:
+        """Get improved translations for problematic texts."""
+        if not texts:
+            return {}
+
+        source_name = LANGUAGE_NAMES[source_lang]
+        target_name = LANGUAGE_NAMES[target_lang]
+
+        numbered_texts = "\n".join(f"[{i+1}] {text}" for i, text in enumerate(texts))
+
+        prompt = f"""These texts were identified as poorly translated or untranslated in a presentation.
+Provide high-quality, CONCISE translations from {source_name} to {target_name}.
+
+Context: {context if context else "Business/corporate presentation"}
+
+RULES:
+1. Keep translations SHORT - suitable for presentation slides
+2. Keep brand names unchanged
+3. Return ONLY JSON mapping number to translation
+
+Texts to translate:
+{numbered_texts}
+
+Return format: {{"1": "translation1", "2": "translation2"}}"""
+
+        try:
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                max_tokens=2000,
+                temperature=0.3,
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            result = response.choices[0].message.content.strip()
+
+            if "```" in result:
+                import re
+                json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', result)
+                if json_match:
+                    result = json_match.group(1)
+
+            translations_dict = json.loads(result)
+
+            return {
+                texts[int(k)-1]: v
+                for k, v in translations_dict.items()
+                if k.isdigit() and int(k) <= len(texts)
+            }
+
+        except Exception as e:
+            logger.error("retranslation_failed", error=str(e))
+            return {}
