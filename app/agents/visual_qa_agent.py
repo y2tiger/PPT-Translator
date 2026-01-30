@@ -14,6 +14,26 @@ from app.models.schemas import Language, LANGUAGE_NAMES
 logger = structlog.get_logger(__name__)
 
 
+def check_libreoffice_available() -> bool:
+    """Check if LibreOffice is available for PPT to image conversion."""
+    try:
+        result = subprocess.run(
+            ["libreoffice", "--version"],
+            capture_output=True,
+            timeout=10
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
+
+
+# Check availability at module load
+LIBREOFFICE_AVAILABLE = check_libreoffice_available()
+if not LIBREOFFICE_AVAILABLE:
+    logger.warning("libreoffice_not_available",
+                   message="Visual QA will be skipped - LibreOffice not installed")
+
+
 @dataclass
 class VisualIssue:
     """Visual issue found by comparing slides."""
@@ -257,6 +277,17 @@ Return as JSON:
         Returns:
             VisualQAReport with issues and improvement suggestions
         """
+        # Check if LibreOffice is available
+        if not LIBREOFFICE_AVAILABLE:
+            logger.warning("visual_qa_skipped_no_libreoffice",
+                           message="LibreOffice not available, skipping visual QA")
+            return VisualQAReport(
+                iteration=iteration,
+                total_slides=-1,  # -1 indicates skipped (not failed)
+                overall_score=-1,  # -1 indicates not available
+                algorithm_improvements=["Visual QA skipped: LibreOffice not installed"],
+            )
+
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
             original_dir = tmpdir_path / "original"

@@ -445,15 +445,26 @@ async function loadQAHistory() {
             const iterDiv = document.createElement('div');
             iterDiv.className = 'qa-iteration';
 
+            // Check if visual QA was skipped (score = -1)
+            const isSkipped = iteration.overall_score === -1;
+
             // Iteration header
             const header = document.createElement('div');
             header.className = 'qa-iteration-header';
-            header.innerHTML = `
-                <h3>검증 ${iteration.iteration}회차</h3>
-                <span class="qa-score ${iteration.overall_score >= 85 ? 'good' : 'needs-work'}">
-                    점수: ${iteration.overall_score}/100
-                </span>
-            `;
+
+            if (isSkipped) {
+                header.innerHTML = `
+                    <h3>검증 ${iteration.iteration}회차</h3>
+                    <span class="qa-score skipped">시각적 QA 불가</span>
+                `;
+            } else {
+                header.innerHTML = `
+                    <h3>검증 ${iteration.iteration}회차</h3>
+                    <span class="qa-score ${iteration.overall_score >= 85 ? 'good' : 'needs-work'}">
+                        점수: ${iteration.overall_score}/100
+                    </span>
+                `;
+            }
             iterDiv.appendChild(header);
 
             // Issues summary

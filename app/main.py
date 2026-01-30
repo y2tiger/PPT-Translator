@@ -455,6 +455,25 @@ async def process_translation(
                     output_dir=qa_images_dir,
                 )
 
+                # Check if visual QA was skipped (LibreOffice not available)
+                if visual_report.overall_score == -1:
+                    logger.warning(
+                        "visual_qa_not_available",
+                        file_id=file_id,
+                        message="Visual QA skipped - LibreOffice not installed",
+                    )
+                    # Store a placeholder QA iteration for UI display
+                    qa_history[file_id].append(QAIterationResponse(
+                        iteration=visual_iteration,
+                        overall_score=-1,
+                        total_slides=0,
+                        critical_issues_count=0,
+                        texts_retranslated=0,
+                        algorithm_improvements=["Visual QA is not available (LibreOffice not installed)"],
+                        slide_comparisons=[],
+                    ))
+                    break  # Exit loop - can't do visual QA without LibreOffice
+
                 logger.info(
                     "visual_qa_iteration",
                     file_id=file_id,
@@ -588,13 +607,20 @@ async def process_translation(
         )
 
         total_texts = sum(len(texts) for texts in texts_by_slide.values())
+
+        # Set final message based on whether visual QA was available
+        if best_score > 0:
+            final_message = f"번역 완료! (품질 점수: {best_score}/100)"
+        else:
+            final_message = "번역 완료! (시각적 QA 불가 - LibreOffice 미설치)"
+
         translation_status[file_id] = TranslationStatus(
             status="completed",
             progress=100,
             total_slides=total_slides,
             current_slide=total_slides,
             review_loop=0,
-            message=f"번역 완료! (품질 점수: {best_score}/100)",
+            message=final_message,
         )
 
         logger.info(

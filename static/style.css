@@ -560,6 +560,11 @@ footer {
     color: #f59e0b;
 }
 
+.qa-score.skipped {
+    background: #6b728020;
+    color: #9ca3af;
+}
+
 .qa-summary {
     color: var(--text-secondary);
     margin-bottom: 1rem;
