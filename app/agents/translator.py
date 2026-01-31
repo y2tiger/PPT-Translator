@@ -104,6 +104,7 @@ CRITICAL RULES:
 3. Translate everything else accurately
 4. Maintain the same length/brevity as the original when possible
 5. Never refuse - always provide a translation or return the original text unchanged
+6. ALWAYS include proper spacing between words - even if source has no spaces
 
 Example:
 Input: "안녕하세요"
@@ -112,7 +113,7 @@ Output: "Dzień dobry"
 Input: "SL"
 Output: "SL"
 
-Input: "제품 품질"
+Input: "제품품질"
 Output: "Jakość produktu" """
 
         user_prompt = f"{text}"
@@ -190,6 +191,8 @@ CRITICAL RULES:
    - For presentation slides, brevity is essential
 4. Never add explanations, apologies, or comments
 5. If a text is already in the target language, return it unchanged
+6. **ALWAYS include proper spacing between words** - Even if the source text has no spaces,
+   the translation MUST have natural word spacing (e.g., "생산기술학교" → "Szkoła Technologii Produkcji" NOT "SzkołaTechnologiiProdukcji")
 
 Example input:
 [1] 안녕하세요
@@ -198,7 +201,7 @@ Example input:
 [4] 생산기술학교
 
 Example output:
-{{"1": "Dzień dobry", "2": "SL Firma", "3": "Średni", "4": "Szkoła Techn. Prod."}}
+{{"1": "Dzień dobry", "2": "Firma SL", "3": "Średni", "4": "Szkoła Techn. Prod."}}
 
 Now translate:"""
 

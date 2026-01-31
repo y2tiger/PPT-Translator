@@ -85,6 +85,60 @@ class VisualQAAgent:
         self.client = openai.AsyncOpenAI(api_key=api_key)
         self.model = model
 
+    def _ppt_to_pdf(self, ppt_path: str, output_dir: Path) -> Path | None:
+        """Convert PPT to PDF using LibreOffice."""
+        try:
+            subprocess.run([
+                "libreoffice", "--headless", "--convert-to", "pdf",
+                "--outdir", str(output_dir), str(ppt_path)
+            ], check=True, capture_output=True, timeout=120)
+
+            ppt_name = Path(ppt_path).stem
+            pdf_file = output_dir / f"{ppt_name}.pdf"
+
+            if not pdf_file.exists():
+                logger.error("pdf_conversion_failed", ppt_path=ppt_path)
+                return None
+
+            return pdf_file
+        except Exception as e:
+            logger.error("ppt_to_pdf_failed", error=str(e))
+            return None
+
+    def _get_pdf_page_count(self, pdf_path: Path) -> int:
+        """Get the number of pages in a PDF."""
+        try:
+            result = subprocess.run([
+                "pdfinfo", str(pdf_path)
+            ], capture_output=True, text=True, timeout=30)
+
+            for line in result.stdout.split('\n'):
+                if line.startswith('Pages:'):
+                    return int(line.split(':')[1].strip())
+            return 0
+        except Exception as e:
+            logger.error("pdf_page_count_failed", error=str(e))
+            return 0
+
+    def _pdf_to_images_batch(self, pdf_path: Path, output_dir: Path,
+                             first_page: int, last_page: int) -> list[Path]:
+        """Convert a range of PDF pages to images."""
+        try:
+            # Using 100 DPI to reduce memory usage
+            subprocess.run([
+                "pdftoppm", "-png", "-r", "100",
+                "-f", str(first_page), "-l", str(last_page),
+                str(pdf_path), str(output_dir / "slide")
+            ], check=True, capture_output=True, timeout=120)
+
+            # Collect generated images
+            images = sorted(output_dir.glob("slide-*.png"))
+            logger.info("pdf_batch_converted", first=first_page, last=last_page, count=len(images))
+            return images
+        except Exception as e:
+            logger.error("pdf_batch_conversion_failed", error=str(e))
+            return []
+
     def _ppt_to_images(self, ppt_path: str, output_dir: Path) -> list[Path]:
         """Convert PPT to images using LibreOffice."""
         try:
@@ -275,9 +329,10 @@ Return as JSON:
         max_slides: int = 5,  # Reduced from 10 for memory optimization
         iteration: int = 1,
         output_dir: Path | None = None,  # Directory to save images for UI
+        batch_size: int = 3,  # Process 3 slides at a time to reduce memory
     ) -> VisualQAReport:
         """
-        Compare original and translated presentations visually.
+        Compare original and translated presentations visually using batch processing.
 
         Args:
             original_ppt_path: Path to original PPT
@@ -287,10 +342,13 @@ Return as JSON:
             max_slides: Maximum slides to compare (for cost control)
             iteration: Current iteration number
             output_dir: Directory to save comparison images (for UI display)
+            batch_size: Number of slides to process at once (default: 3)
 
         Returns:
             VisualQAReport with issues and improvement suggestions
         """
+        import gc
+
         # Check if LibreOffice is available
         if not LIBREOFFICE_AVAILABLE:
             logger.warning("visual_qa_skipped_no_libreoffice",
@@ -309,71 +367,118 @@ Return as JSON:
             original_dir.mkdir()
             translated_dir.mkdir()
 
-            # Convert both PPTs to images
-            logger.info("converting_original_ppt")
-            original_images = self._ppt_to_images(original_ppt_path, original_dir)
+            # Step 1: Convert PPTs to PDFs (one time only)
+            logger.info("converting_ppts_to_pdf")
+            original_pdf = self._ppt_to_pdf(original_ppt_path, original_dir)
+            translated_pdf = self._ppt_to_pdf(translated_ppt_path, translated_dir)
 
-            logger.info("converting_translated_ppt")
-            translated_images = self._ppt_to_images(translated_ppt_path, translated_dir)
-
-            if not original_images or not translated_images:
-                logger.error("image_conversion_failed")
+            if not original_pdf or not translated_pdf:
+                logger.error("pdf_conversion_failed")
                 return VisualQAReport(total_slides=0)
 
-            # Compare slides
-            comparisons = []
-            all_issues = []
-            all_suggestions = []
-            total_score = 0
+            # Step 2: Get page counts
+            original_pages = self._get_pdf_page_count(original_pdf)
+            translated_pages = self._get_pdf_page_count(translated_pdf)
+            num_slides = min(original_pages, translated_pages, max_slides)
 
-            num_slides = min(len(original_images), len(translated_images), max_slides)
+            if num_slides == 0:
+                logger.error("no_pages_found")
+                return VisualQAReport(total_slides=0)
+
+            logger.info("batch_processing_start", total_slides=num_slides, batch_size=batch_size)
 
             # Create iteration directory for saving images if output_dir provided
-            slide_comparisons = []
+            iter_dir = None
             if output_dir:
                 iter_dir = output_dir / f"iteration_{iteration}"
                 iter_dir.mkdir(parents=True, exist_ok=True)
 
-            for i in range(num_slides):
-                logger.info("comparing_slide", slide=i+1, total=num_slides)
+            # Step 3: Process in batches
+            comparisons = []
+            all_issues = []
+            all_suggestions = []
+            total_score = 0
+            slide_comparisons = []
 
-                comparison = await self._compare_slides_vision(
-                    original_images[i],
-                    translated_images[i],
-                    slide_number=i + 1,
-                    source_lang=source_lang,
-                    target_lang=target_lang,
+            for batch_start in range(1, num_slides + 1, batch_size):
+                batch_end = min(batch_start + batch_size - 1, num_slides)
+                logger.info("processing_batch", batch_start=batch_start, batch_end=batch_end)
+
+                # Create batch directories
+                batch_orig_dir = tmpdir_path / f"batch_orig_{batch_start}"
+                batch_trans_dir = tmpdir_path / f"batch_trans_{batch_start}"
+                batch_orig_dir.mkdir(exist_ok=True)
+                batch_trans_dir.mkdir(exist_ok=True)
+
+                # Convert batch pages to images
+                original_images = self._pdf_to_images_batch(
+                    original_pdf, batch_orig_dir, batch_start, batch_end
+                )
+                translated_images = self._pdf_to_images_batch(
+                    translated_pdf, batch_trans_dir, batch_start, batch_end
                 )
 
-                comparisons.append(comparison)
-                all_issues.extend(comparison.issues)
-                all_suggestions.extend(comparison.algorithm_suggestions)
-                total_score += comparison.quality_score
+                if not original_images or not translated_images:
+                    logger.warning("batch_conversion_failed", batch_start=batch_start)
+                    continue
 
-                # Save images and create slide comparison
-                original_image_path = ""
-                translated_image_path = ""
+                # Compare slides in this batch
+                for i, (orig_img, trans_img) in enumerate(zip(original_images, translated_images)):
+                    slide_num = batch_start + i
+                    logger.info("comparing_slide", slide=slide_num, total=num_slides)
 
-                if output_dir:
-                    # Copy images to persistent location
-                    orig_dest = iter_dir / f"slide_{i+1}_original.png"
-                    trans_dest = iter_dir / f"slide_{i+1}_translated.png"
-                    shutil.copy(original_images[i], orig_dest)
-                    shutil.copy(translated_images[i], trans_dest)
-                    original_image_path = str(orig_dest)
-                    translated_image_path = str(trans_dest)
+                    comparison = await self._compare_slides_vision(
+                        orig_img,
+                        trans_img,
+                        slide_number=slide_num,
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                    )
 
-                slide_comparisons.append(SlideComparison(
-                    slide_number=i + 1,
-                    original_image_path=original_image_path,
-                    translated_image_path=translated_image_path,
-                    issues=comparison.issues,
-                    quality_score=comparison.quality_score,
-                    algorithm_suggestions=comparison.algorithm_suggestions,
-                ))
+                    comparisons.append(comparison)
+                    all_issues.extend(comparison.issues)
+                    all_suggestions.extend(comparison.algorithm_suggestions)
+                    total_score += comparison.quality_score
+
+                    # Save images and create slide comparison
+                    original_image_path = ""
+                    translated_image_path = ""
+
+                    if iter_dir:
+                        # Copy images to persistent location
+                        orig_dest = iter_dir / f"slide_{slide_num}_original.png"
+                        trans_dest = iter_dir / f"slide_{slide_num}_translated.png"
+                        shutil.copy(orig_img, orig_dest)
+                        shutil.copy(trans_img, trans_dest)
+                        original_image_path = str(orig_dest)
+                        translated_image_path = str(trans_dest)
+
+                    slide_comparisons.append(SlideComparison(
+                        slide_number=slide_num,
+                        original_image_path=original_image_path,
+                        translated_image_path=translated_image_path,
+                        issues=comparison.issues,
+                        quality_score=comparison.quality_score,
+                        algorithm_suggestions=comparison.algorithm_suggestions,
+                    ))
+
+                # Clean up batch images to free memory
+                for img in original_images:
+                    img.unlink(missing_ok=True)
+                for img in translated_images:
+                    img.unlink(missing_ok=True)
+                shutil.rmtree(batch_orig_dir, ignore_errors=True)
+                shutil.rmtree(batch_trans_dir, ignore_errors=True)
+                gc.collect()
+                logger.info("batch_cleanup_complete", batch_start=batch_start)
+
+            # Clean up PDFs
+            original_pdf.unlink(missing_ok=True)
+            translated_pdf.unlink(missing_ok=True)
 
             # Calculate overall score
-            overall_score = total_score // num_slides if num_slides > 0 else 0
+            processed_slides = len(comparisons)
+            overall_score = total_score // processed_slides if processed_slides > 0 else 0
 
             # Extract critical issues
             critical_issues = [i for i in all_issues if i.severity == "critical"]
@@ -389,7 +494,7 @@ Return as JSON:
 
             report = VisualQAReport(
                 iteration=iteration,
-                total_slides=num_slides,
+                total_slides=processed_slides,
                 comparisons=comparisons,
                 slide_comparisons=slide_comparisons,
                 overall_score=overall_score,
@@ -401,7 +506,7 @@ Return as JSON:
             logger.info(
                 "visual_qa_complete",
                 iteration=iteration,
-                total_slides=num_slides,
+                total_slides=processed_slides,
                 overall_score=overall_score,
                 critical_issues=len(critical_issues),
                 suggestions=len(unique_suggestions),
