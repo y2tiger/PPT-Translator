@@ -1,7 +1,6 @@
 import structlog
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
-from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.util import Pt
 from typing import Generator
 
@@ -28,29 +27,64 @@ def _reset_character_spacing(run):
         logger.debug("reset_spacing_failed", error=str(e))
 
 
-def _apply_aggressive_autofit(text_frame):
+def _reduce_margins(text_frame):
     """
-    Apply aggressive auto-fit settings to a text frame.
-    This makes the text shrink to fit within the shape boundaries.
+    Reduce text frame margins to give more space for text.
+    Note: We do NOT use TEXT_TO_FIT_SHAPE as PowerPoint's auto-fit
+    has minimum size limits that cause text truncation.
+    Instead, we manually reduce font sizes.
     """
     try:
-        # Set auto-size to shrink text to fit the shape
-        text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
-
         # Reduce margins to give more space for text
         # Margins are in EMUs (914400 EMUs = 1 inch)
-        # Setting to ~0.05 inch margins
-        text_frame.margin_left = 45720   # ~0.05 inch
-        text_frame.margin_right = 45720
-        text_frame.margin_top = 45720
-        text_frame.margin_bottom = 45720
-
-        # Enable word wrap to prevent text overflow
-        text_frame.word_wrap = True
-
-        logger.debug("autofit_applied")
+        # Setting to ~0.03 inch margins (minimal)
+        text_frame.margin_left = 27432   # ~0.03 inch
+        text_frame.margin_right = 27432
+        text_frame.margin_top = 27432
+        text_frame.margin_bottom = 27432
+        logger.debug("margins_reduced")
     except Exception as e:
-        logger.debug("autofit_failed", error=str(e))
+        logger.debug("margin_reduction_failed", error=str(e))
+
+
+def _get_effective_font_size(run, paragraph):
+    """
+    Get the effective font size for a run, checking multiple sources.
+    Returns size in EMUs or None if not determinable.
+    """
+    # Try run's font size first
+    if run.font.size is not None:
+        return run.font.size
+
+    # Try to get from paragraph's default run properties
+    try:
+        if hasattr(paragraph, '_defRPr') and paragraph._defRPr is not None:
+            if hasattr(paragraph._defRPr, 'sz') and paragraph._defRPr.sz is not None:
+                return paragraph._defRPr.sz
+    except Exception:
+        pass
+
+    # Try to get from other runs in the same paragraph
+    try:
+        for r in paragraph.runs:
+            if r.font.size is not None:
+                return r.font.size
+    except Exception:
+        pass
+
+    return None
+
+
+def _apply_font_size(run, new_size_pt):
+    """
+    Apply a specific font size in points to a run.
+    """
+    try:
+        run.font.size = Pt(new_size_pt)
+        return True
+    except Exception as e:
+        logger.debug("font_size_apply_failed", error=str(e))
+        return False
 
 
 class PPTService:
@@ -173,6 +207,9 @@ class PPTService:
         Key insight: Korean characters are wider than Latin characters,
         so even if the character count ratio is 3:1, the visual width ratio
         is often closer to 1.5:1. We need to account for this.
+
+        IMPORTANT: PowerPoint's auto-fit has minimum size limits, so we must
+        be very aggressive with manual font reduction to prevent truncation.
         """
         if not original or not translated:
             return 1.0
@@ -181,11 +218,11 @@ class PPTService:
         korean_char_count = sum(1 for c in original if '\uAC00' <= c <= '\uD7A3' or '\u1100' <= c <= '\u11FF')
 
         # Calculate effective width ratio
-        # Korean characters are roughly 1.8x wider than Latin characters
-        # So "광학" (2 chars) ≈ "LENS" (4 chars) in visual width
-        korean_width_factor = 1.8
+        # Korean characters are roughly 2.0x wider than Latin characters visually
+        # So "광학" (2 Korean chars) ≈ "LENS" (4 Latin chars) in visual width
+        korean_width_factor = 2.0
         original_effective_width = (korean_char_count * korean_width_factor) + (len(original) - korean_char_count)
-        translated_effective_width = len(translated)  # Latin chars are narrower
+        translated_effective_width = len(translated)
 
         # Calculate width ratio based on effective widths
         if original_effective_width > 0:
@@ -195,23 +232,26 @@ class PPTService:
 
         # If translated text is visually wider, reduce font size
         if width_ratio > 1.0:
-            # More aggressive formula using power of 0.6 instead of 0.5
-            # For width_ratio 1.5: ~0.74 (74%)
-            # For width_ratio 2.0: ~0.66 (66%)
-            # For width_ratio 2.5: ~0.59 (59%)
-            # For width_ratio 3.0: ~0.54 (54%)
-            size_ratio = 1.0 / (width_ratio ** 0.6)
+            # VERY aggressive formula - use power of 0.85 for direct proportion
+            # For width_ratio 1.5: ~0.70 (70%)
+            # For width_ratio 2.0: ~0.55 (55%)
+            # For width_ratio 2.5: ~0.46 (46%)
+            # For width_ratio 3.0: ~0.39 (39%)
+            size_ratio = 1.0 / (width_ratio ** 0.85)
 
-            # For short original text (diagram labels), be MORE aggressive
-            # These are typically in small constrained boxes
-            if len(original) < 8:
-                # Even more aggressive for short labels
-                size_ratio = 1.0 / (width_ratio ** 0.7)
-                # Allow down to 40% for diagram labels
-                size_ratio = max(0.40, size_ratio)
+            # For short original text (diagram labels in small boxes)
+            # These need EXTREME reduction as the boxes are tiny
+            if len(original) <= 5:
+                # Extremely aggressive for very short labels
+                size_ratio = 1.0 / (width_ratio ** 0.95)
+                size_ratio = max(0.30, size_ratio)  # Allow down to 30%
+            elif len(original) <= 10:
+                # Very aggressive for short labels
+                size_ratio = 1.0 / (width_ratio ** 0.90)
+                size_ratio = max(0.35, size_ratio)  # Allow down to 35%
             else:
-                # Normal text: cap at 45% minimum
-                size_ratio = max(0.45, size_ratio)
+                # Normal text
+                size_ratio = max(0.40, size_ratio)  # Allow down to 40%
 
             return size_ratio
 
@@ -237,8 +277,8 @@ class PPTService:
 
         # Handle text frames - apply at PARAGRAPH level
         if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
-            # Apply aggressive auto-fit for text to shrink if needed
-            _apply_aggressive_autofit(shape.text_frame)
+            # Reduce margins to give more space (don't use TEXT_TO_FIT_SHAPE)
+            _reduce_margins(shape.text_frame)
 
             for paragraph in shape.text_frame.paragraphs:
                 para_text = paragraph.text.strip()
@@ -262,19 +302,38 @@ class PPTService:
                         _reset_character_spacing(first_run)
 
                         # Reduce font size if needed
-                        if size_ratio < 1.0 and first_run.font.size:
-                            try:
-                                original_size = first_run.font.size
-                                new_size = int(original_size * size_ratio)
-                                first_run.font.size = Pt(new_size / 12700)  # Convert EMUs to Pt
+                        if size_ratio < 1.0:
+                            # Get effective font size (handles inherited/theme fonts)
+                            original_size = _get_effective_font_size(first_run, paragraph)
+
+                            if original_size:
+                                # original_size is in EMUs, convert to points
+                                original_pt = original_size / 12700
+                                new_pt = original_pt * size_ratio
+                                # Ensure minimum readable size (6pt)
+                                new_pt = max(6.0, new_pt)
+                                _apply_font_size(first_run, new_pt)
                                 logger.debug(
                                     "font_size_reduced",
-                                    original_size=original_size,
-                                    new_size=new_size,
-                                    ratio=size_ratio,
+                                    original_pt=round(original_pt, 1),
+                                    new_pt=round(new_pt, 1),
+                                    ratio=round(size_ratio, 2),
                                 )
-                            except Exception as e:
-                                logger.debug("font_size_reduction_failed", error=str(e))
+                            else:
+                                # Font size not found - apply a reasonable default based on text length
+                                # For short labels, use smaller font
+                                if len(translated) <= 10:
+                                    default_pt = 8.0
+                                elif len(translated) <= 20:
+                                    default_pt = 9.0
+                                else:
+                                    default_pt = 10.0
+                                _apply_font_size(first_run, default_pt)
+                                logger.debug(
+                                    "font_size_default_applied",
+                                    default_pt=default_pt,
+                                    text_len=len(translated),
+                                )
 
                         # Clear remaining runs
                         for run in paragraph.runs[1:]:
@@ -298,8 +357,8 @@ class PPTService:
             try:
                 for row in shape.table.rows:
                     for cell in row.cells:
-                        # Apply aggressive auto-fit to table cells
-                        _apply_aggressive_autofit(cell.text_frame)
+                        # Reduce margins for table cells
+                        _reduce_margins(cell.text_frame)
 
                         for para in cell.text_frame.paragraphs:
                             para_text = para.text.strip()
@@ -316,13 +375,16 @@ class PPTService:
                                     _reset_character_spacing(first_run)
 
                                     # Reduce font size if needed
-                                    if size_ratio < 1.0 and first_run.font.size:
-                                        try:
-                                            original_size = first_run.font.size
-                                            new_size = int(original_size * size_ratio)
-                                            first_run.font.size = Pt(new_size / 12700)
-                                        except Exception:
-                                            pass
+                                    if size_ratio < 1.0:
+                                        original_size = _get_effective_font_size(first_run, para)
+                                        if original_size:
+                                            original_pt = original_size / 12700
+                                            new_pt = max(6.0, original_pt * size_ratio)
+                                            _apply_font_size(first_run, new_pt)
+                                        else:
+                                            # Default for table cells
+                                            default_pt = 8.0 if len(translated) <= 15 else 9.0
+                                            _apply_font_size(first_run, default_pt)
 
                                     for run in para.runs[1:]:
                                         run.text = ""
