@@ -7,9 +7,8 @@ RUN apt-get update && apt-get install -y \
     fontconfig \
     curl \
     unzip \
-    # Korean fonts
+    # Korean fonts (fonts-nanum includes coding fonts)
     fonts-nanum \
-    fonts-nanum-coding \
     fonts-nanum-extra \
     fonts-noto-cjk \
     fonts-noto-cjk-extra \
