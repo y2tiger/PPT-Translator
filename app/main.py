@@ -249,11 +249,14 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             fonts_missing=font_info.get("missing_fonts", []),
         )
     except Exception as e:
-        logger.error("file_processing_failed", file_id=file_id, error=str(e))
+        import traceback
+        error_detail = str(e)
+        stack_trace = traceback.format_exc()
+        logger.error("file_processing_failed", file_id=file_id, error=error_detail, traceback=stack_trace)
         file_path.unlink(missing_ok=True)
         raise HTTPException(
             status_code=400,
-            detail="PPT 파일 처리 중 오류가 발생했습니다. 파일이 손상되었거나 지원되지 않는 형식입니다."
+            detail=f"PPT 파일 처리 중 오류가 발생했습니다: {error_detail[:200]}"
         )
 
     return {
