@@ -216,6 +216,14 @@ Now translate:"""
                 if json_match:
                     result = json_match.group(1)
 
+            # Sanitize control characters that may be in the JSON response
+            # Replace unescaped tabs with spaces, remove other control characters
+            import re
+            # Replace tabs with spaces (common issue with GPT responses)
+            result = result.replace('\t', ' ')
+            # Remove other control characters except newlines (which are valid for formatting)
+            result = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', result)
+
             # Parse JSON response
             translations_dict = json.loads(result)
 
