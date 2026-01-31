@@ -592,9 +592,101 @@ async function loadQAHistory() {
 
         qaSection.classList.remove('hidden');
 
+        // Also populate algorithm suggestions section
+        displayAlgorithmSuggestions(data);
+
     } catch (error) {
         console.error('Failed to load QA history:', error);
         qaSection.classList.add('hidden');
+    }
+}
+
+// Display algorithm suggestions in a copyable format
+function displayAlgorithmSuggestions(qaData) {
+    const suggestionsSection = document.getElementById('suggestions-section');
+    const suggestionsContent = document.getElementById('suggestions-content');
+
+    if (!qaData.iterations || qaData.iterations.length === 0) {
+        suggestionsSection.classList.add('hidden');
+        return;
+    }
+
+    // Collect all unique suggestions and issues
+    const allSuggestions = new Set();
+    const allIssues = [];
+
+    qaData.iterations.forEach(iteration => {
+        // Collect algorithm improvements
+        if (iteration.algorithm_improvements) {
+            iteration.algorithm_improvements.forEach(imp => allSuggestions.add(imp));
+        }
+
+        // Collect issues from slide comparisons
+        if (iteration.slide_comparisons) {
+            iteration.slide_comparisons.forEach(slide => {
+                if (slide.issues) {
+                    slide.issues.forEach(issue => {
+                        allIssues.push({
+                            slide: slide.slide_number,
+                            type: issue.issue_type,
+                            text: issue.original_text,
+                            description: issue.description,
+                            suggestion: issue.suggestion
+                        });
+                    });
+                }
+            });
+        }
+    });
+
+    // Build the suggestions text
+    let suggestionsText = '=== 알고리즘 개선 제안 ===\n\n';
+    suggestionsText += `최종 점수: ${qaData.final_score}/100\n\n`;
+
+    suggestionsText += '--- 개선 제안 ---\n';
+    allSuggestions.forEach(suggestion => {
+        suggestionsText += `• ${suggestion}\n`;
+    });
+
+    suggestionsText += '\n--- 발견된 문제점 ---\n';
+    allIssues.forEach(issue => {
+        suggestionsText += `[슬라이드 ${issue.slide}] ${getIssueTypeLabel(issue.type)}\n`;
+        if (issue.text) suggestionsText += `  원본: ${issue.text}\n`;
+        if (issue.description) suggestionsText += `  설명: ${issue.description}\n`;
+        if (issue.suggestion) suggestionsText += `  제안: ${issue.suggestion}\n`;
+        suggestionsText += '\n';
+    });
+
+    // Create pre element for copyable text
+    suggestionsContent.innerHTML = '';
+    const pre = document.createElement('pre');
+    pre.id = 'suggestions-text';
+    pre.textContent = suggestionsText;
+    suggestionsContent.appendChild(pre);
+
+    suggestionsSection.classList.remove('hidden');
+}
+
+// Copy suggestions to clipboard
+async function copySuggestions() {
+    const suggestionsText = document.getElementById('suggestions-text');
+    if (!suggestionsText) return;
+
+    try {
+        await navigator.clipboard.writeText(suggestionsText.textContent);
+        const copyBtn = document.querySelector('.btn-copy');
+        const originalText = copyBtn.innerHTML;
+        copyBtn.innerHTML = '<span aria-hidden="true">✅</span> 복사됨!';
+        setTimeout(() => {
+            copyBtn.innerHTML = originalText;
+        }, 2000);
+    } catch (err) {
+        console.error('Failed to copy:', err);
+        // Fallback: select the text
+        const range = document.createRange();
+        range.selectNode(suggestionsText);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
     }
 }
 
@@ -653,6 +745,13 @@ function resetForm() {
     if (qaSection) {
         qaSection.classList.add('hidden');
         document.getElementById('qa-iterations').innerHTML = '';
+    }
+
+    // Hide and clear suggestions section
+    const suggestionsSection = document.getElementById('suggestions-section');
+    if (suggestionsSection) {
+        suggestionsSection.classList.add('hidden');
+        document.getElementById('suggestions-content').innerHTML = '';
     }
 
     resetUploadArea();

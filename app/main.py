@@ -464,6 +464,10 @@ async def process_translation(
             ppt_service = PPTService(str(file_path))
             _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
 
+            # Apply target font BEFORE visual comparison so images match final output
+            if target_font:
+                apply_font_to_ppt(str(output_path), str(output_path), target_font)
+
             # Visual comparison
             translation_status[file_id] = TranslationStatus(
                 status="processing",
