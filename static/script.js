@@ -24,7 +24,26 @@ document.addEventListener('DOMContentLoaded', () => {
     loadFonts();
     setupUploadHandlers();
     loadOptionsFromLocalStorage();
+    setupOptionChangeListeners();
 });
+
+// Setup change listeners for all options to auto-save
+function setupOptionChangeListeners() {
+    // Language selects
+    sourceLangSelect.addEventListener('change', saveOptionsToLocalStorage);
+    targetLangSelect.addEventListener('change', saveOptionsToLocalStorage);
+
+    // Font select
+    targetFontSelect.addEventListener('change', saveOptionsToLocalStorage);
+
+    // Visual QA checkbox
+    document.getElementById('enable-visual-qa').addEventListener('change', saveOptionsToLocalStorage);
+
+    // Translation style radio buttons
+    document.querySelectorAll('input[name="translation-style"]').forEach(radio => {
+        radio.addEventListener('change', saveOptionsToLocalStorage);
+    });
+}
 
 // Save options to localStorage
 function saveOptionsToLocalStorage() {
