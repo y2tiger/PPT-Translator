@@ -116,6 +116,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # In-memory status tracking (for single instance)
 translation_status: dict[str, TranslationStatus] = {}
 qa_history: dict[str, list[QAIterationResponse]] = {}  # Store QA iterations per file
+original_filenames: dict[str, str] = {}  # Store original filenames for download
 
 
 def validate_file_id(file_id: str) -> str:
@@ -258,6 +259,9 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
             status_code=400,
             detail=f"PPT 파일 처리 중 오류가 발생했습니다: {error_detail[:200]}"
         )
+
+    # Store original filename for download
+    original_filenames[file_id] = file.filename
 
     return {
         "file_id": file_id,
@@ -761,11 +765,18 @@ async def download_file(file_id: str):
     if not output_path.exists():
         raise HTTPException(status_code=404, detail="번역된 파일을 찾을 수 없습니다")
 
-    logger.info("file_downloaded", file_id=file_id)
+    # Get original filename and create translated filename
+    original_name = original_filenames.get(file_id, "translated.pptx")
+    if original_name.lower().endswith(".pptx"):
+        download_name = original_name[:-5] + "_translated.pptx"
+    else:
+        download_name = original_name + "_translated.pptx"
+
+    logger.info("file_downloaded", file_id=file_id, download_name=download_name)
 
     return FileResponse(
         path=output_path,
-        filename="translated.pptx",
+        filename=download_name,
         media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
     )
 
@@ -826,6 +837,8 @@ async def delete_file(file_id: str):
         del translation_status[file_id]
     if file_id in qa_history:
         del qa_history[file_id]
+    if file_id in original_filenames:
+        del original_filenames[file_id]
 
     logger.info("files_deleted", file_id=file_id)
     return {"message": "파일이 삭제되었습니다"}
