@@ -326,7 +326,7 @@ Return as JSON:
         translated_ppt_path: str,
         source_lang: Language,
         target_lang: Language,
-        max_slides: int = 5,  # Reduced from 10 for memory optimization
+        max_slides: int = 9999,  # Process all slides (batch processing handles memory)
         iteration: int = 1,
         output_dir: Path | None = None,  # Directory to save images for UI
         batch_size: int = 3,  # Process 3 slides at a time to reduce memory
@@ -334,13 +334,14 @@ Return as JSON:
     ) -> VisualQAReport:
         """
         Compare original and translated presentations visually using batch processing.
+        All slides are processed in batches of 3 to manage memory usage.
 
         Args:
             original_ppt_path: Path to original PPT
             translated_ppt_path: Path to translated PPT
             source_lang: Source language
             target_lang: Target language
-            max_slides: Maximum slides to compare (for cost control)
+            max_slides: Maximum slides to compare (default: all slides)
             iteration: Current iteration number
             output_dir: Directory to save comparison images (for UI display)
             batch_size: Number of slides to process at once (default: 3)

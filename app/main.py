@@ -505,7 +505,7 @@ async def process_translation(
                         translated_ppt_path=str(output_path),
                         source_lang=source_lang,
                         target_lang=target_lang,
-                        max_slides=min(5, total_slides),  # Reduced for memory optimization
+                        max_slides=total_slides,  # Process all slides with batch processing
                         iteration=visual_iteration,
                         output_dir=qa_images_dir,
                         progress_callback=visual_qa_progress,
