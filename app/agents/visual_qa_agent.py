@@ -168,7 +168,16 @@ For each issue found, provide:
 
 Also provide:
 - Overall quality score (0-100)
-- Algorithm improvement suggestions (e.g., "need to handle grouped shapes", "font size should be reduced for long translations")
+- Algorithm improvement suggestions - ONLY from the categories below:
+
+SUGGESTION CATEGORIES (choose the most relevant):
+- [EXTRACTION] Text not extracted: "특정 텍스트 '{{text}}' 추출 실패 - 슬라이드 {{N}}번의 {{위치}} 영역 확인 필요"
+- [TRANSLATION] Translation quality: "번역 품질 개선 필요: '{{원문}}' → 현재 '{{번역}}', 제안: '{{더 나은 번역}}'"
+- [FONT_SIZE] Text too long: "폰트 크기 축소 필요: '{{text}}' (원문 {{N}}자 → 번역 {{M}}자, {{ratio}}배 증가)"
+- [TRUNCATION] Text cut off: "텍스트 잘림: '{{text}}' - 번역을 더 짧게 요약 필요"
+- [GROUPED_SHAPE] Grouped object: "그룹 도형 내 텍스트 '{{text}}' 처리 실패 - 슬라이드 {{N}}번"
+- [TABLE] Table cell: "테이블 셀 텍스트 '{{text}}' 처리 필요 - 행{{R}}/열{{C}}"
+- [SPECIAL_CHAR] Special characters: "특수문자/기호 포함 텍스트 처리 필요: '{{text}}'"
 
 Return as JSON:
 {{
@@ -182,8 +191,8 @@ Return as JSON:
     }}
   ],
   "algorithm_suggestions": [
-    "Reduce font size when translation is longer than original",
-    "Check for text in grouped shapes"
+    "[EXTRACTION] 특정 텍스트 '에스엘' 추출 실패 - 슬라이드 1번의 상단 로고 영역 확인 필요",
+    "[FONT_SIZE] 폰트 크기 축소 필요: 'Szkoła Technologii' (원문 5자 → 번역 18자, 3.6배 증가)"
   ]
 }}"""
 
