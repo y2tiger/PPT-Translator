@@ -30,7 +30,7 @@ from app.utils.font_utils import (
 
 # QA loop settings
 MAX_QA_ITERATIONS = 3
-MAX_VISUAL_ITERATIONS = 5  # Visual comparison iterations
+MAX_VISUAL_ITERATIONS = 2  # Visual comparison iterations
 VISUAL_QA_QUALITY_THRESHOLD = 85  # Score threshold to pass
 
 # Configure structured logging
