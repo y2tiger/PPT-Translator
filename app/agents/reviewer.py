@@ -29,6 +29,7 @@ class ReviewerAgent:
         response = await self.client.chat.completions.create(
             model=self.model,
             max_tokens=max_tokens,
+            timeout=90.0,  # 90 second timeout
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

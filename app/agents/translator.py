@@ -44,6 +44,7 @@ class TranslatorAgent:
             model=self.model,
             max_tokens=max_tokens,
             temperature=0.3,  # Lower temperature for more consistent translations
+            timeout=90.0,  # 90 second timeout
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

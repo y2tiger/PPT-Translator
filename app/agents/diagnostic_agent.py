@@ -251,6 +251,7 @@ Issues to fix:"""
                 model=self.model,
                 max_tokens=4096,
                 temperature=0.2,
+                timeout=90.0,  # 90 second timeout
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": issues_text},

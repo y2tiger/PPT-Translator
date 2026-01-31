@@ -200,6 +200,7 @@ Return as JSON:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=2000,
+                timeout=120.0,  # 2 minute timeout for vision API
                 messages=[
                     {
                         "role": "user",
@@ -440,6 +441,7 @@ Return format: {{"1": "translation1", "2": "translation2"}}"""
                 model=self.model,
                 max_tokens=2000,
                 temperature=0.3,
+                timeout=90.0,  # 90 second timeout
                 messages=[{"role": "user", "content": prompt}]
             )
 
