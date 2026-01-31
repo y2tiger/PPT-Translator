@@ -301,6 +301,7 @@ async function startTranslation() {
     const sourceLang = sourceLangSelect.value;
     const targetLang = targetLangSelect.value;
     const targetFont = targetFontSelect.value;
+    const enableVisualQA = document.getElementById('enable-visual-qa').checked;
 
     if (!sourceLang || !targetLang) {
         showInlineError('원본 언어와 목표 언어를 모두 선택해주세요');
@@ -339,7 +340,7 @@ async function startTranslation() {
         addActivityLog(`파일 ${i + 1}/${uploadedFiles.length} 번역 시작: ${uploadedFiles[i].filename}`);
 
         try {
-            await processFile(uploadedFiles[i], sourceLang, targetLang, targetFont);
+            await processFile(uploadedFiles[i], sourceLang, targetLang, targetFont, enableVisualQA);
             uploadedFiles[i].status = 'completed';
             addActivityLog(`파일 ${i + 1}/${uploadedFiles.length} 완료: ${uploadedFiles[i].filename}`);
         } catch (error) {
@@ -355,11 +356,12 @@ async function startTranslation() {
 }
 
 // Process a single file
-async function processFile(file, sourceLang, targetLang, targetFont) {
+async function processFile(file, sourceLang, targetLang, targetFont, enableVisualQA) {
     const formData = new FormData();
     formData.append('source_language', sourceLang);
     formData.append('target_language', targetLang);
     formData.append('target_font', targetFont);
+    formData.append('enable_visual_qa', enableVisualQA ? 'true' : 'false');
 
     const response = await fetch(`/api/translate/${file.fileId}`, {
         method: 'POST',

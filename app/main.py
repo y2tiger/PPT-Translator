@@ -278,6 +278,7 @@ async def process_translation(
     source_lang: Language,
     target_lang: Language,
     target_font: str | None = None,
+    enable_visual_qa: bool = True,
 ):
     """Background task for translation processing with slide-based context."""
     logger.info(
@@ -446,183 +447,189 @@ async def process_translation(
                 )
                 break
 
-        # Visual QA Loop - Compare images and iteratively improve
-        visual_qa_agent = VisualQAAgent(api_key)
-        best_score = 0
-
-        # Create directory for QA images
-        qa_images_dir = UPLOAD_DIR / f"{file_id}_qa"
-        qa_images_dir.mkdir(exist_ok=True)
-
-        # Initialize QA history for this file
+        # Visual QA Loop - Compare images and iteratively improve (optional)
         qa_history[file_id] = []
 
-        for visual_iteration in range(1, MAX_VISUAL_ITERATIONS + 1):
-            # Apply current translations
-            translation_status[file_id] = TranslationStatus(
-                status="processing",
-                progress=70 + (visual_iteration * 5),
-                total_slides=total_slides,
-                current_slide=total_slides,
-                review_loop=visual_iteration,
-                message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: PPT 생성 중...",
-            )
+        if not enable_visual_qa:
+            logger.info("visual_qa_disabled", file_id=file_id)
+        else:
+            visual_qa_agent = VisualQAAgent(api_key)
+            best_score = 0
 
-            # Re-create PPT service for fresh state
-            ppt_service = PPTService(str(file_path))
-            _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
+            # Create directory for QA images
+            qa_images_dir = UPLOAD_DIR / f"{file_id}_qa"
+            qa_images_dir.mkdir(exist_ok=True)
 
-            # Note: Font is applied AFTER all Visual QA iterations for fair comparison
-            # Both original and translated use their original fonts during comparison
-
-            # Visual comparison
-            translation_status[file_id] = TranslationStatus(
-                status="processing",
-                progress=70 + (visual_iteration * 5) + 2,
-                total_slides=total_slides,
-                current_slide=total_slides,
-                review_loop=visual_iteration,
-                message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: 이미지 비교 중...",
-            )
-
-            try:
-                visual_report = await visual_qa_agent.compare_presentations(
-                    original_ppt_path=str(file_path),
-                    translated_ppt_path=str(output_path),
-                    source_lang=source_lang,
-                    target_lang=target_lang,
-                    max_slides=min(5, total_slides),  # Reduced for memory optimization
-                    iteration=visual_iteration,
-                    output_dir=qa_images_dir,
+            for visual_iteration in range(1, MAX_VISUAL_ITERATIONS + 1):
+                # Apply current translations
+                translation_status[file_id] = TranslationStatus(
+                    status="processing",
+                    progress=70 + (visual_iteration * 5),
+                    total_slides=total_slides,
+                    current_slide=total_slides,
+                    review_loop=visual_iteration,
+                    message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: PPT 생성 중...",
                 )
 
-                # Check if visual QA was skipped (LibreOffice not available)
-                if visual_report.overall_score == -1:
-                    logger.warning(
-                        "visual_qa_not_available",
-                        file_id=file_id,
-                        message="Visual QA skipped - LibreOffice not installed",
-                    )
-                    # Store a placeholder QA iteration for UI display
-                    qa_history[file_id].append(QAIterationResponse(
+                # Re-create PPT service for fresh state
+                ppt_service = PPTService(str(file_path))
+                _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
+
+                # Note: Font is applied AFTER all Visual QA iterations for fair comparison
+                # Both original and translated use their original fonts during comparison
+
+                # Visual comparison
+                translation_status[file_id] = TranslationStatus(
+                    status="processing",
+                    progress=70 + (visual_iteration * 5) + 2,
+                    total_slides=total_slides,
+                    current_slide=total_slides,
+                    review_loop=visual_iteration,
+                    message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: 이미지 비교 중...",
+                )
+
+                try:
+                    visual_report = await visual_qa_agent.compare_presentations(
+                        original_ppt_path=str(file_path),
+                        translated_ppt_path=str(output_path),
+                        source_lang=source_lang,
+                        target_lang=target_lang,
+                        max_slides=min(5, total_slides),  # Reduced for memory optimization
                         iteration=visual_iteration,
-                        overall_score=-1,
-                        total_slides=0,
-                        critical_issues_count=0,
-                        texts_retranslated=0,
-                        algorithm_improvements=["Visual QA is not available (LibreOffice not installed)"],
-                        slide_comparisons=[],
-                    ))
-                    break  # Exit loop - can't do visual QA without LibreOffice
+                        output_dir=qa_images_dir,
+                    )
 
-                logger.info(
-                    "visual_qa_iteration",
-                    file_id=file_id,
-                    iteration=visual_iteration,
-                    score=visual_report.overall_score,
-                    critical_issues=len(visual_report.critical_issues),
-                    improvements=visual_report.algorithm_improvements,
-                )
-
-                # Store QA iteration for UI display
-                slide_comparisons_response = []
-                for sc in visual_report.slide_comparisons:
-                    # Convert file paths to URLs
-                    orig_url = f"/api/qa-image/{file_id}/{visual_iteration}/{sc.slide_number}/original"
-                    trans_url = f"/api/qa-image/{file_id}/{visual_iteration}/{sc.slide_number}/translated"
-
-                    issues_response = [
-                        VisualIssueResponse(
-                            slide_number=issue.slide_number,
-                            issue_type=issue.issue_type or "",
-                            description=issue.description or "",
-                            original_text=issue.original_text or "",
-                            suggestion=issue.suggestion or "",
-                            severity=issue.severity or "warning",
+                    # Check if visual QA was skipped (LibreOffice not available)
+                    if visual_report.overall_score == -1:
+                        logger.warning(
+                            "visual_qa_not_available",
+                            file_id=file_id,
+                            message="Visual QA skipped - LibreOffice not installed",
                         )
-                        for issue in sc.issues
-                    ]
+                        # Store a placeholder QA iteration for UI display
+                        qa_history[file_id].append(QAIterationResponse(
+                            iteration=visual_iteration,
+                            overall_score=-1,
+                            total_slides=0,
+                            critical_issues_count=0,
+                            texts_retranslated=0,
+                            algorithm_improvements=["Visual QA is not available (LibreOffice not installed)"],
+                            slide_comparisons=[],
+                        ))
+                        break  # Exit loop - can't do visual QA without LibreOffice
 
-                    slide_comparisons_response.append(SlideComparisonResponse(
-                        slide_number=sc.slide_number,
-                        original_image_url=orig_url,
-                        translated_image_url=trans_url,
-                        issues=issues_response,
-                        quality_score=sc.quality_score,
-                        suggestions=sc.algorithm_suggestions,
-                    ))
-
-                qa_iteration_response = QAIterationResponse(
-                    iteration=visual_iteration,
-                    overall_score=visual_report.overall_score,
-                    total_slides=visual_report.total_slides,
-                    critical_issues_count=len(visual_report.critical_issues),
-                    texts_retranslated=len(visual_report.texts_to_retranslate),
-                    algorithm_improvements=visual_report.algorithm_improvements,
-                    slide_comparisons=slide_comparisons_response,
-                )
-                qa_history[file_id].append(qa_iteration_response)
-
-                best_score = max(best_score, visual_report.overall_score)
-
-                # Check if quality is good enough
-                if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD:
                     logger.info(
-                        "visual_qa_passed",
+                        "visual_qa_iteration",
                         file_id=file_id,
                         iteration=visual_iteration,
                         score=visual_report.overall_score,
-                    )
-                    break
-
-                # Get retranslations for problematic texts
-                if visual_report.texts_to_retranslate:
-                    translation_status[file_id] = TranslationStatus(
-                        status="processing",
-                        progress=70 + (visual_iteration * 5) + 4,
-                        total_slides=total_slides,
-                        current_slide=total_slides,
-                        review_loop=visual_iteration,
-                        message=f"시각적 품질 검증 {visual_iteration}회차: {len(visual_report.texts_to_retranslate)}개 텍스트 재번역 중...",
+                        critical_issues=len(visual_report.critical_issues),
+                        improvements=visual_report.algorithm_improvements,
                     )
 
-                    retranslations = await visual_qa_agent.get_retranslations(
-                        texts=visual_report.texts_to_retranslate,
-                        source_lang=source_lang,
-                        target_lang=target_lang,
-                    )
+                    # Store QA iteration for UI display
+                    slide_comparisons_response = []
+                    for sc in visual_report.slide_comparisons:
+                        # Convert file paths to URLs
+                        orig_url = f"/api/qa-image/{file_id}/{visual_iteration}/{sc.slide_number}/original"
+                        trans_url = f"/api/qa-image/{file_id}/{visual_iteration}/{sc.slide_number}/translated"
 
-                    if retranslations:
-                        all_translations.update(retranslations)
+                        issues_response = [
+                            VisualIssueResponse(
+                                slide_number=issue.slide_number,
+                                issue_type=issue.issue_type or "",
+                                description=issue.description or "",
+                                original_text=issue.original_text or "",
+                                suggestion=issue.suggestion or "",
+                                severity=issue.severity or "warning",
+                            )
+                            for issue in sc.issues
+                        ]
+
+                        slide_comparisons_response.append(SlideComparisonResponse(
+                            slide_number=sc.slide_number,
+                            original_image_url=orig_url,
+                            translated_image_url=trans_url,
+                            issues=issues_response,
+                            quality_score=sc.quality_score,
+                            suggestions=sc.algorithm_suggestions,
+                        ))
+
+                    qa_iteration_response = QAIterationResponse(
+                        iteration=visual_iteration,
+                        overall_score=visual_report.overall_score,
+                        total_slides=visual_report.total_slides,
+                        critical_issues_count=len(visual_report.critical_issues),
+                        texts_retranslated=len(visual_report.texts_to_retranslate),
+                        algorithm_improvements=visual_report.algorithm_improvements,
+                        slide_comparisons=slide_comparisons_response,
+                    )
+                    qa_history[file_id].append(qa_iteration_response)
+
+                    best_score = max(best_score, visual_report.overall_score)
+
+                    # Check if quality is good enough
+                    if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD:
                         logger.info(
-                            "visual_retranslations_applied",
+                            "visual_qa_passed",
                             file_id=file_id,
                             iteration=visual_iteration,
-                            count=len(retranslations),
-                        )
-                    else:
-                        # No improvements possible
-                        logger.warning(
-                            "no_visual_improvements",
-                            file_id=file_id,
-                            iteration=visual_iteration,
+                            score=visual_report.overall_score,
                         )
                         break
-                else:
-                    # No texts to retranslate, we're done
+
+                    # Get retranslations for problematic texts
+                    if visual_report.texts_to_retranslate:
+                        translation_status[file_id] = TranslationStatus(
+                            status="processing",
+                            progress=70 + (visual_iteration * 5) + 4,
+                            total_slides=total_slides,
+                            current_slide=total_slides,
+                            review_loop=visual_iteration,
+                            message=f"시각적 품질 검증 {visual_iteration}회차: {len(visual_report.texts_to_retranslate)}개 텍스트 재번역 중...",
+                        )
+
+                        retranslations = await visual_qa_agent.get_retranslations(
+                            texts=visual_report.texts_to_retranslate,
+                            source_lang=source_lang,
+                            target_lang=target_lang,
+                        )
+
+                        if retranslations:
+                            all_translations.update(retranslations)
+                            logger.info(
+                                "visual_retranslations_applied",
+                                file_id=file_id,
+                                iteration=visual_iteration,
+                                count=len(retranslations),
+                            )
+                        else:
+                            # No improvements possible
+                            logger.warning(
+                                "no_visual_improvements",
+                                file_id=file_id,
+                                iteration=visual_iteration,
+                            )
+                            break
+                    else:
+                        # No texts to retranslate, we're done
+                        break
+
+                except Exception as visual_error:
+                    logger.warning(
+                        "visual_qa_skipped",
+                        file_id=file_id,
+                        iteration=visual_iteration,
+                        error=str(visual_error),
+                    )
+                    # Continue without visual QA if it fails (e.g., LibreOffice not installed)
                     break
 
-            except Exception as visual_error:
-                logger.warning(
-                    "visual_qa_skipped",
-                    file_id=file_id,
-                    iteration=visual_iteration,
-                    error=str(visual_error),
-                )
-                # Continue without visual QA if it fails (e.g., LibreOffice not installed)
-                break
+            # Free memory after Visual QA loop
+            gc.collect()
+            logger.info("memory_freed_after_visual_qa", file_id=file_id)
 
-        # Free memory after Visual QA loop
+        # Free memory after Visual QA loop (or if skipped)
         gc.collect()
         logger.info("memory_freed_after_visual_qa", file_id=file_id)
 
@@ -702,6 +709,7 @@ async def start_translation(
     source_language: str = Form(...),
     target_language: str = Form(...),
     target_font: str = Form("pretendard"),
+    enable_visual_qa: str = Form("true"),
 ):
     """Start translation process."""
     file_id = validate_file_id(file_id)
@@ -736,6 +744,9 @@ async def start_translation(
         message="번역 대기 중...",
     )
 
+    # Parse enable_visual_qa (form sends string)
+    visual_qa_enabled = enable_visual_qa.lower() == "true"
+
     # Start background task
     background_tasks.add_task(
         process_translation,
@@ -743,9 +754,10 @@ async def start_translation(
         source_lang,
         target_lang,
         font_name,
+        visual_qa_enabled,
     )
 
-    logger.info("translation_queued", file_id=file_id, target_font=target_font)
+    logger.info("translation_queued", file_id=file_id, target_font=target_font, visual_qa=visual_qa_enabled)
     return {"message": "번역이 시작되었습니다", "file_id": file_id}
 
 
