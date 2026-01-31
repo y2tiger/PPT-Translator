@@ -523,11 +523,11 @@ async def process_translation(
                     issues_response = [
                         VisualIssueResponse(
                             slide_number=issue.slide_number,
-                            issue_type=issue.issue_type,
-                            description=issue.description,
-                            original_text=issue.original_text,
-                            suggestion=issue.suggestion,
-                            severity=issue.severity,
+                            issue_type=issue.issue_type or "",
+                            description=issue.description or "",
+                            original_text=issue.original_text or "",
+                            suggestion=issue.suggestion or "",
+                            severity=issue.severity or "warning",
                         )
                         for issue in sc.issues
                     ]
