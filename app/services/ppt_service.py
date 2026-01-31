@@ -61,16 +61,16 @@ class PPTService:
             except Exception as e:
                 logger.debug("table_extraction_error", error=str(e))
 
-        # Handle placeholders (titles, subtitles, content)
-        if hasattr(shape, 'placeholder_format') and shape.placeholder_format is not None:
-            try:
+        # Handle placeholders (titles, subtitles, content) - for debugging only
+        # Note: accessing placeholder_format can raise "shape is not a placeholder" exception
+        try:
+            if hasattr(shape, 'placeholder_format') and shape.placeholder_format is not None:
                 if hasattr(shape, 'text') and shape.text.strip():
-                    # Already handled by text_frame above, but log for debugging
                     logger.debug("placeholder_found",
                                 placeholder_type=str(shape.placeholder_format.type),
                                 text_preview=shape.text[:30] if shape.text else "")
-            except Exception:
-                pass
+        except Exception:
+            pass  # Not a placeholder, ignore
 
     def extract_texts(self) -> Generator[dict, None, None]:
         """Extract all text elements from the presentation."""
