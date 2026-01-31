@@ -3,9 +3,28 @@ from pptx import Presentation
 from pptx.shapes.group import GroupShape
 from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.util import Pt
+from pptx.oxml.ns import qn
 from typing import Generator
 
 logger = structlog.get_logger(__name__)
+
+
+def _reset_character_spacing(run):
+    """
+    Reset character spacing to normal (0) for a run.
+    Korean text often uses condensed spacing which doesn't work well with Latin characters.
+    """
+    try:
+        # Access the underlying XML element
+        rPr = run._r.get_or_add_rPr()
+        # Remove the 'spc' (spacing) attribute if it exists
+        # spc is in hundredths of a point, negative = condensed, positive = expanded
+        if rPr.get(qn('a:spc')) is not None:
+            del rPr.attrib[qn('a:spc')]
+        # Also set it explicitly to 0 for safety
+        rPr.set(qn('a:spc'), '0')
+    except Exception as e:
+        logger.debug("reset_spacing_failed", error=str(e))
 
 
 class PPTService:
@@ -195,6 +214,9 @@ class PPTService:
                         first_run.text = translated
                         first_run.font.name = target_font
 
+                        # Reset character spacing to normal (Korean often has condensed spacing)
+                        _reset_character_spacing(first_run)
+
                         # Reduce font size if needed
                         if size_ratio < 1.0 and first_run.font.size:
                             try:
@@ -214,6 +236,7 @@ class PPTService:
                         for run in paragraph.runs[1:]:
                             run.text = ""
                             run.font.name = target_font
+                            _reset_character_spacing(run)
 
                         # Track successful application
                         applied_tracker[para_text] = True
@@ -242,6 +265,9 @@ class PPTService:
                                     first_run.text = translated
                                     first_run.font.name = target_font
 
+                                    # Reset character spacing to normal
+                                    _reset_character_spacing(first_run)
+
                                     # Reduce font size if needed
                                     if size_ratio < 1.0 and first_run.font.size:
                                         try:
@@ -254,6 +280,7 @@ class PPTService:
                                     for run in para.runs[1:]:
                                         run.text = ""
                                         run.font.name = target_font
+                                        _reset_character_spacing(run)
                                     applied_tracker[para_text] = True
             except Exception as e:
                 logger.debug("table_apply_error", error=str(e))
