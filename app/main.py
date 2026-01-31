@@ -23,7 +23,10 @@ from app.agents.translator import TranslatorAgent
 from app.agents.qa_agent import QAAgent
 from app.agents.diagnostic_agent import DiagnosticAgent, IssueSeverity
 from app.agents.visual_qa_agent import VisualQAAgent
-from app.utils.font_utils import check_missing_fonts, create_libreoffice_font_substitution
+from app.utils.font_utils import (
+    check_missing_fonts, create_libreoffice_font_substitution,
+    get_available_fonts, apply_font_to_ppt, AVAILABLE_FONTS, DEFAULT_KOREAN_FONT
+)
 
 # QA loop settings
 MAX_QA_ITERATIONS = 3
@@ -174,6 +177,15 @@ async def get_languages():
     }
 
 
+@app.get("/api/fonts")
+async def get_fonts():
+    """Get available fonts for translation output."""
+    return {
+        "fonts": get_available_fonts(),
+        "default": "pretendard",
+    }
+
+
 @app.post("/api/upload")
 @limiter.limit("10/minute")
 async def upload_file(request: Request, file: UploadFile = File(...)):
@@ -257,6 +269,7 @@ async def process_translation(
     file_id: str,
     source_lang: Language,
     target_lang: Language,
+    target_font: str | None = None,
 ):
     """Background task for translation processing with slide-based context."""
     logger.info(
@@ -264,6 +277,7 @@ async def process_translation(
         file_id=file_id,
         source=source_lang.value,
         target=target_lang.value,
+        target_font=target_font or DEFAULT_KOREAN_FONT,
     )
 
     try:
@@ -611,6 +625,11 @@ async def process_translation(
         ppt_service = PPTService(str(file_path))
         _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
 
+        # Apply target font if specified
+        if target_font:
+            apply_font_to_ppt(str(output_path), str(output_path), target_font)
+            logger.info("font_applied", file_id=file_id, font=target_font)
+
         # Log final summary
         applied_count = sum(1 for v in applied_tracker.values() if v)
         logger.info(
@@ -667,6 +686,7 @@ async def start_translation(
     background_tasks: BackgroundTasks,
     source_language: str = Form(...),
     target_language: str = Form(...),
+    target_font: str = Form("pretendard"),
 ):
     """Start translation process."""
     file_id = validate_file_id(file_id)
@@ -684,6 +704,13 @@ async def start_translation(
     if source_lang == target_lang:
         raise HTTPException(status_code=400, detail="원본 언어와 대상 언어가 같습니다")
 
+    # Validate font selection
+    if target_font not in AVAILABLE_FONTS:
+        target_font = "pretendard"
+
+    # Get actual font name from selection
+    font_name = AVAILABLE_FONTS[target_font]["name"]
+
     # Initialize status
     translation_status[file_id] = TranslationStatus(
         status="queued",
@@ -700,9 +727,10 @@ async def start_translation(
         file_id,
         source_lang,
         target_lang,
+        font_name,
     )
 
-    logger.info("translation_queued", file_id=file_id)
+    logger.info("translation_queued", file_id=file_id, target_font=target_font)
     return {"message": "번역이 시작되었습니다", "file_id": file_id}
 
 

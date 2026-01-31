@@ -233,6 +233,16 @@ header h1 {
     outline-offset: 2px;
 }
 
+.option-group.option-full {
+    grid-column: 1 / -1;
+}
+
+.option-group .hint {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    opacity: 0.8;
+}
+
 /* Agent Info */
 .agent-info {
     background: rgba(99, 102, 241, 0.1);

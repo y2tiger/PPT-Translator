@@ -15,10 +15,12 @@ const resultSection = document.getElementById('result-section');
 const errorSection = document.getElementById('error-section');
 const sourceLangSelect = document.getElementById('source-lang');
 const targetLangSelect = document.getElementById('target-lang');
+const targetFontSelect = document.getElementById('target-font');
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     loadLanguages();
+    loadFonts();
     setupUploadHandlers();
 });
 
@@ -49,6 +51,32 @@ async function loadLanguages() {
     } catch (error) {
         console.error('Failed to load languages:', error);
         showInlineError('언어 목록을 불러오는데 실패했습니다. 페이지를 새로고침해주세요.');
+    }
+}
+
+// Load available fonts
+async function loadFonts() {
+    try {
+        const response = await fetch('/api/fonts');
+        if (!response.ok) throw new Error('폰트 목록을 불러올 수 없습니다');
+
+        const data = await response.json();
+
+        // Clear existing options
+        targetFontSelect.innerHTML = '';
+
+        data.fonts.forEach(font => {
+            const option = document.createElement('option');
+            option.value = font.id;
+            option.textContent = font.display_name;
+            if (font.id === data.default) {
+                option.selected = true;
+            }
+            targetFontSelect.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Failed to load fonts:', error);
+        // Keep default option if loading fails
     }
 }
 
@@ -210,6 +238,7 @@ function resetUploadArea() {
 async function startTranslation() {
     const sourceLang = sourceLangSelect.value;
     const targetLang = targetLangSelect.value;
+    const targetFont = targetFontSelect.value;
 
     if (!sourceLang || !targetLang) {
         showInlineError('원본 언어와 목표 언어를 모두 선택해주세요');
@@ -229,6 +258,7 @@ async function startTranslation() {
     const formData = new FormData();
     formData.append('source_language', sourceLang);
     formData.append('target_language', targetLang);
+    formData.append('target_font', targetFont);
 
     try {
         const response = await fetch(`/api/translate/${currentFileId}`, {
