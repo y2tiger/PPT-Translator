@@ -47,6 +47,19 @@ def _reduce_margins(text_frame):
         logger.debug("margin_reduction_failed", error=str(e))
 
 
+def _disable_word_wrap(text_frame):
+    """
+    Disable word wrap to prevent text from breaking mid-word.
+    For short labels in diagram boxes, we want text to stay on one line
+    and shrink the font instead of wrapping.
+    """
+    try:
+        text_frame.word_wrap = False
+        logger.debug("word_wrap_disabled")
+    except Exception as e:
+        logger.debug("word_wrap_disable_failed", error=str(e))
+
+
 def _get_effective_font_size(run, paragraph):
     """
     Get the effective font size for a run, checking multiple sources.
@@ -276,20 +289,21 @@ class PPTService:
 
             # For short original text (diagram labels in small boxes)
             # These need EXTREME reduction as the boxes are tiny
+            # With word_wrap disabled, text must fit on one line
             if len(original) <= 5:
-                # Extremely aggressive for very short labels
+                # Extremely aggressive for very short labels (like LENS, BEZEL)
                 size_ratio = 1.0 / (effective_width_ratio ** 0.95)
-                size_ratio = max(0.30, size_ratio)  # Allow down to 30%
+                size_ratio = max(0.25, size_ratio)  # Allow down to 25%
                 # For forced reduction on very short text, be even more aggressive
-                if force_reduction and size_ratio > 0.7:
-                    size_ratio = 0.65  # Force at least 35% reduction
+                if force_reduction and size_ratio > 0.6:
+                    size_ratio = 0.55  # Force at least 45% reduction
                 logger.info("ratio_short_text", orig_len=len(original), final_ratio=round(size_ratio, 3), category="<=5", forced=force_reduction)
             elif len(original) <= 10:
                 # Very aggressive for short labels
                 size_ratio = 1.0 / (effective_width_ratio ** 0.90)
-                size_ratio = max(0.35, size_ratio)  # Allow down to 35%
-                if force_reduction and size_ratio > 0.75:
-                    size_ratio = 0.70  # Force at least 30% reduction
+                size_ratio = max(0.30, size_ratio)  # Allow down to 30%
+                if force_reduction and size_ratio > 0.65:
+                    size_ratio = 0.60  # Force at least 40% reduction
                 logger.info("ratio_short_text", orig_len=len(original), final_ratio=round(size_ratio, 3), category="<=10", forced=force_reduction)
             else:
                 # Normal text
@@ -326,6 +340,24 @@ class PPTService:
         if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
             # Reduce margins to give more space (don't use TEXT_TO_FIT_SHAPE)
             _reduce_margins(shape.text_frame)
+
+            # Check if this shape contains short text that should not wrap
+            # We'll enable/disable word wrap based on the longest translated text
+            all_para_texts = [p.text.strip() for p in shape.text_frame.paragraphs if p.text.strip()]
+            max_translated_len = 0
+            for para_text in all_para_texts:
+                if para_text in translations:
+                    max_translated_len = max(max_translated_len, len(translations[para_text]))
+
+            # Disable word wrap for short labels (prevents mid-word breaks like "LEN S")
+            # For labels under 20 chars, keep on one line and shrink font instead
+            if max_translated_len > 0 and max_translated_len <= 20:
+                _disable_word_wrap(shape.text_frame)
+                logger.info(
+                    "word_wrap_disabled_short_label",
+                    shape_id=shape_id,
+                    max_translated_len=max_translated_len,
+                )
 
             for paragraph in shape.text_frame.paragraphs:
                 para_text = paragraph.text.strip()
@@ -364,8 +396,10 @@ class PPTService:
                                 # original_size is in EMUs, convert to points
                                 original_pt = original_size / 12700
                                 new_pt = original_pt * size_ratio
-                                # Ensure minimum readable size (6pt)
-                                new_pt = max(6.0, new_pt)
+                                # Minimum readable size: 5pt for short labels, 6pt otherwise
+                                # Short labels are on single line (word_wrap disabled) so can be smaller
+                                min_pt = 5.0 if len(translated) <= 15 else 6.0
+                                new_pt = max(min_pt, new_pt)
                                 _apply_font_size(first_run, new_pt)
                                 logger.info(
                                     "font_reduced",
@@ -376,18 +410,22 @@ class PPTService:
                                 )
                             else:
                                 # Font size not found - apply a reasonable default based on text length
-                                # For short labels, use smaller font
-                                if len(translated) <= 10:
-                                    default_pt = 8.0
+                                # For short labels in small boxes, use smaller fonts
+                                # These are likely diagram labels where text must fit on one line
+                                if len(translated) <= 8:
+                                    default_pt = 6.0  # Very small for tight boxes
+                                elif len(translated) <= 12:
+                                    default_pt = 7.0
                                 elif len(translated) <= 20:
-                                    default_pt = 9.0
+                                    default_pt = 8.0
                                 else:
-                                    default_pt = 10.0
+                                    default_pt = 9.0
                                 _apply_font_size(first_run, default_pt)
                                 logger.info(
                                     "font_default_applied",
                                     text=translated[:20],
                                     default_pt=default_pt,
+                                    trans_len=len(translated),
                                     reason="no_original_size_found",
                                 )
                         else:
@@ -422,12 +460,14 @@ class PPTService:
                             run.font.name = target_font
                             if size_ratio < 1.0:
                                 # Apply a default small font for short labels
-                                if len(translated) <= 10:
-                                    _apply_font_size(run, 8.0)
+                                if len(translated) <= 8:
+                                    _apply_font_size(run, 6.0)
+                                elif len(translated) <= 12:
+                                    _apply_font_size(run, 7.0)
                                 elif len(translated) <= 20:
-                                    _apply_font_size(run, 9.0)
+                                    _apply_font_size(run, 8.0)
                                 else:
-                                    _apply_font_size(run, 10.0)
+                                    _apply_font_size(run, 9.0)
                             applied_tracker[para_text] = True
                             logger.info("run_added_successfully", text=translated[:20])
                         except Exception as e:
