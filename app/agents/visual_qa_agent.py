@@ -105,10 +105,14 @@ class VisualQAAgent:
                 return []
 
             # Convert PDF to images using pdftoppm (from poppler-utils)
+            # Using 100 DPI instead of 150 to reduce memory usage
             subprocess.run([
-                "pdftoppm", "-png", "-r", "150",
+                "pdftoppm", "-png", "-r", "100",
                 str(pdf_file), str(output_dir / "slide")
             ], check=True, capture_output=True, timeout=120)
+
+            # Delete PDF immediately to free memory
+            pdf_file.unlink(missing_ok=True)
 
             # Collect generated images
             images = sorted(output_dir.glob("slide-*.png"))
@@ -268,7 +272,7 @@ Return as JSON:
         translated_ppt_path: str,
         source_lang: Language,
         target_lang: Language,
-        max_slides: int = 10,  # Limit for cost control
+        max_slides: int = 5,  # Reduced from 10 for memory optimization
         iteration: int = 1,
         output_dir: Path | None = None,  # Directory to save images for UI
     ) -> VisualQAReport:

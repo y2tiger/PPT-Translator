@@ -1,3 +1,4 @@
+import gc
 import os
 import re
 import uuid
@@ -490,7 +491,7 @@ async def process_translation(
                     translated_ppt_path=str(output_path),
                     source_lang=source_lang,
                     target_lang=target_lang,
-                    max_slides=min(10, total_slides),  # Limit for cost
+                    max_slides=min(5, total_slides),  # Reduced for memory optimization
                     iteration=visual_iteration,
                     output_dir=qa_images_dir,
                 )
@@ -620,6 +621,10 @@ async def process_translation(
                 )
                 # Continue without visual QA if it fails (e.g., LibreOffice not installed)
                 break
+
+        # Free memory after Visual QA loop
+        gc.collect()
+        logger.info("memory_freed_after_visual_qa", file_id=file_id)
 
         # Final application
         translation_status[file_id] = TranslationStatus(
