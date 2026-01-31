@@ -470,6 +470,18 @@ async def process_translation(
             qa_images_dir = UPLOAD_DIR / f"{file_id}_qa"
             qa_images_dir.mkdir(exist_ok=True)
 
+            # IMPORTANT: Create a backup copy of the original Korean PPT BEFORE any translations
+            # This ensures we have an unmodified original for Visual QA comparison
+            import shutil
+            original_backup_path = UPLOAD_DIR / f"{file_id}_original_backup.pptx"
+            if not original_backup_path.exists():
+                shutil.copy(file_path, original_backup_path)
+                logger.info(
+                    "original_backup_created",
+                    file_id=file_id,
+                    backup_path=str(original_backup_path),
+                )
+
             for visual_iteration in range(1, max_iterations + 1):
                 # Apply current translations
                 translation_status[file_id] = TranslationStatus(
@@ -487,19 +499,19 @@ async def process_translation(
 
                 # Log paths being used for Visual QA comparison
                 import hashlib
-                orig_hash = hashlib.md5(file_path.read_bytes()).hexdigest()[:8] if file_path.exists() else "none"
+                backup_hash = hashlib.md5(original_backup_path.read_bytes()).hexdigest()[:8] if original_backup_path.exists() else "none"
                 trans_hash = hashlib.md5(output_path.read_bytes()).hexdigest()[:8] if output_path.exists() else "none"
                 logger.info(
                     "visual_qa_paths",
                     file_id=file_id,
                     iteration=visual_iteration,
-                    original_path=str(file_path),
+                    original_backup_path=str(original_backup_path),
                     translated_path=str(output_path),
-                    original_exists=file_path.exists(),
+                    backup_exists=original_backup_path.exists(),
                     translated_exists=output_path.exists(),
-                    original_hash=orig_hash,
+                    backup_hash=backup_hash,
                     translated_hash=trans_hash,
-                    files_are_same=(orig_hash == trans_hash),
+                    files_are_same=(backup_hash == trans_hash),
                 )
 
                 # Note: Font is applied AFTER all Visual QA iterations for fair comparison
@@ -527,8 +539,9 @@ async def process_translation(
                     )
 
                 try:
+                    # Use the backup copy for comparison to ensure original Korean is preserved
                     visual_report = await visual_qa_agent.compare_presentations(
-                        original_ppt_path=str(file_path),
+                        original_ppt_path=str(original_backup_path),
                         translated_ppt_path=str(output_path),
                         source_lang=source_lang,
                         target_lang=target_lang,
@@ -929,12 +942,15 @@ async def delete_file(file_id: str):
 
     file_path = UPLOAD_DIR / f"{file_id}.pptx"
     output_path = UPLOAD_DIR / f"{file_id}_translated.pptx"
+    original_backup_path = UPLOAD_DIR / f"{file_id}_original_backup.pptx"
     qa_dir = UPLOAD_DIR / f"{file_id}_qa"
 
     if file_path.exists():
         file_path.unlink()
     if output_path.exists():
         output_path.unlink()
+    if original_backup_path.exists():
+        original_backup_path.unlink()
     if qa_dir.exists():
         import shutil
         shutil.rmtree(qa_dir)
