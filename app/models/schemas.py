@@ -26,9 +26,27 @@ LANGUAGE_NAMES = {
 }
 
 
+class TranslationStyle(str, Enum):
+    """Translation style options."""
+    TECHNICAL = "technical"  # 기술 문서 - 직역, 정확성 중시
+    MARKETING = "marketing"  # 마케팅 문서 - 의역, 문화적 적응
+
+
+TRANSLATION_STYLE_NAMES = {
+    TranslationStyle.TECHNICAL: "기술 문서 (직역)",
+    TranslationStyle.MARKETING: "마케팅 문서 (의역)",
+}
+
+TRANSLATION_STYLE_DESCRIPTIONS = {
+    TranslationStyle.TECHNICAL: "정확한 직역을 우선시합니다. 기술 용어와 전문 용어를 그대로 유지합니다.",
+    TranslationStyle.MARKETING: "자연스러운 표현과 문화적 적응을 우선시합니다. 메시지의 느낌과 임팩트를 전달합니다.",
+}
+
+
 class TranslationRequest(BaseModel):
     source_language: Language
     target_language: Language
+    translation_style: TranslationStyle = TranslationStyle.TECHNICAL
     min_review_loops: int = 5
 
 

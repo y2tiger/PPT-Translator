@@ -16,6 +16,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.models.schemas import (
     Language, TranslationStatus, LANGUAGE_NAMES,
+    TranslationStyle, TRANSLATION_STYLE_NAMES, TRANSLATION_STYLE_DESCRIPTIONS,
     QAHistoryResponse, QAIterationResponse, SlideComparisonResponse, VisualIssueResponse
 )
 from app.services.ppt_service import PPTService
@@ -279,6 +280,7 @@ async def process_translation(
     target_lang: Language,
     target_font: str | None = None,
     enable_visual_qa: bool = True,
+    translation_style: TranslationStyle = TranslationStyle.TECHNICAL,
 ):
     """Background task for translation processing with slide-based context."""
     logger.info(
@@ -287,6 +289,7 @@ async def process_translation(
         source=source_lang.value,
         target=target_lang.value,
         target_font=target_font or DEFAULT_KOREAN_FONT,
+        translation_style=translation_style.value,
     )
 
     try:
@@ -359,6 +362,7 @@ async def process_translation(
                 source_lang=source_lang,
                 target_lang=target_lang,
                 slide_number=slide_num,
+                translation_style=translation_style,
             )
 
             # Merge translations
@@ -760,6 +764,7 @@ async def start_translation(
     target_language: str = Form(...),
     target_font: str = Form("pretendard"),
     enable_visual_qa: str = Form("true"),
+    translation_style: str = Form("technical"),
 ):
     """Start translation process."""
     file_id = validate_file_id(file_id)
@@ -773,6 +778,12 @@ async def start_translation(
         target_lang = Language(target_language)
     except ValueError:
         raise HTTPException(status_code=400, detail="지원하지 않는 언어입니다")
+
+    # Parse translation style
+    try:
+        style = TranslationStyle(translation_style)
+    except ValueError:
+        style = TranslationStyle.TECHNICAL
 
     if source_lang == target_lang:
         raise HTTPException(status_code=400, detail="원본 언어와 대상 언어가 같습니다")
@@ -805,9 +816,10 @@ async def start_translation(
         target_lang,
         font_name,
         visual_qa_enabled,
+        style,
     )
 
-    logger.info("translation_queued", file_id=file_id, target_font=target_font, visual_qa=visual_qa_enabled)
+    logger.info("translation_queued", file_id=file_id, target_font=target_font, visual_qa=visual_qa_enabled, style=style.value)
     return {"message": "번역이 시작되었습니다", "file_id": file_id}
 
 

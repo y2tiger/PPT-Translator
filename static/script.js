@@ -23,7 +23,54 @@ document.addEventListener('DOMContentLoaded', () => {
     loadLanguages();
     loadFonts();
     setupUploadHandlers();
+    loadOptionsFromLocalStorage();
 });
+
+// Save options to localStorage
+function saveOptionsToLocalStorage() {
+    const options = {
+        sourceLang: sourceLangSelect.value,
+        targetLang: targetLangSelect.value,
+        targetFont: targetFontSelect.value,
+        enableVisualQA: document.getElementById('enable-visual-qa').checked,
+        translationStyle: document.querySelector('input[name="translation-style"]:checked')?.value || 'technical',
+    };
+    localStorage.setItem('ppt-translator-options', JSON.stringify(options));
+}
+
+// Load options from localStorage
+function loadOptionsFromLocalStorage() {
+    try {
+        const saved = localStorage.getItem('ppt-translator-options');
+        if (!saved) return;
+
+        const options = JSON.parse(saved);
+
+        // Apply saved options after a short delay (to ensure languages/fonts are loaded)
+        setTimeout(() => {
+            if (options.sourceLang) {
+                sourceLangSelect.value = options.sourceLang;
+            }
+            if (options.targetLang) {
+                targetLangSelect.value = options.targetLang;
+            }
+            if (options.targetFont) {
+                targetFontSelect.value = options.targetFont;
+            }
+            if (typeof options.enableVisualQA === 'boolean') {
+                document.getElementById('enable-visual-qa').checked = options.enableVisualQA;
+            }
+            if (options.translationStyle) {
+                const styleRadio = document.querySelector(`input[name="translation-style"][value="${options.translationStyle}"]`);
+                if (styleRadio) {
+                    styleRadio.checked = true;
+                }
+            }
+        }, 500);
+    } catch (error) {
+        console.error('Failed to load saved options:', error);
+    }
+}
 
 // Load available languages (XSS-safe)
 async function loadLanguages() {
@@ -302,6 +349,7 @@ async function startTranslation() {
     const targetLang = targetLangSelect.value;
     const targetFont = targetFontSelect.value;
     const enableVisualQA = document.getElementById('enable-visual-qa').checked;
+    const translationStyle = document.querySelector('input[name="translation-style"]:checked')?.value || 'technical';
 
     if (!sourceLang || !targetLang) {
         showInlineError('원본 언어와 목표 언어를 모두 선택해주세요');
@@ -318,6 +366,9 @@ async function startTranslation() {
         showInlineError('번역할 파일이 없습니다');
         return;
     }
+
+    // Save options to localStorage for next time
+    saveOptionsToLocalStorage();
 
     // Disable button
     const startBtn = document.getElementById('start-btn');
@@ -340,7 +391,7 @@ async function startTranslation() {
         addActivityLog(`파일 ${i + 1}/${uploadedFiles.length} 번역 시작: ${uploadedFiles[i].filename}`);
 
         try {
-            await processFile(uploadedFiles[i], sourceLang, targetLang, targetFont, enableVisualQA);
+            await processFile(uploadedFiles[i], sourceLang, targetLang, targetFont, enableVisualQA, translationStyle);
             uploadedFiles[i].status = 'completed';
             addActivityLog(`파일 ${i + 1}/${uploadedFiles.length} 완료: ${uploadedFiles[i].filename}`);
         } catch (error) {
@@ -356,12 +407,13 @@ async function startTranslation() {
 }
 
 // Process a single file
-async function processFile(file, sourceLang, targetLang, targetFont, enableVisualQA) {
+async function processFile(file, sourceLang, targetLang, targetFont, enableVisualQA, translationStyle) {
     const formData = new FormData();
     formData.append('source_language', sourceLang);
     formData.append('target_language', targetLang);
     formData.append('target_font', targetFont);
     formData.append('enable_visual_qa', enableVisualQA ? 'true' : 'false');
+    formData.append('translation_style', translationStyle);
 
     const response = await fetch(`/api/translate/${file.fileId}`, {
         method: 'POST',

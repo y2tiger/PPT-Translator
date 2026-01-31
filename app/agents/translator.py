@@ -3,7 +3,7 @@ import openai
 import structlog
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from app.models.schemas import Language, LANGUAGE_NAMES
+from app.models.schemas import Language, LANGUAGE_NAMES, TranslationStyle
 
 logger = structlog.get_logger(__name__)
 
@@ -144,6 +144,7 @@ Output: "Jakość produktu" """
         source_lang: Language,
         target_lang: Language,
         slide_number: int,
+        translation_style: TranslationStyle = TranslationStyle.TECHNICAL,
     ) -> dict[str, str]:
         """
         Translate all texts from a slide together for better context.
@@ -172,6 +173,7 @@ Output: "Jakość produktu" """
             "slide_batch_translation_started",
             slide_number=slide_number,
             text_count=len(texts_to_translate),
+            style=translation_style.value,
         )
 
         # Build numbered list for translation
@@ -179,9 +181,30 @@ Output: "Jakość produktu" """
             f"[{i+1}] {text}" for i, text in enumerate(texts_to_translate)
         )
 
+        # Style-specific instructions
+        if translation_style == TranslationStyle.TECHNICAL:
+            style_instructions = """TRANSLATION STYLE: TECHNICAL (기술 문서)
+- Prioritize ACCURACY and PRECISION over naturalness
+- Translate LITERALLY - preserve the exact meaning of technical terms
+- Keep technical terminology consistent throughout
+- Do NOT paraphrase or simplify technical content
+- Maintain the formal, professional tone
+- If unsure, prefer the more literal translation"""
+        else:  # MARKETING
+            style_instructions = """TRANSLATION STYLE: MARKETING (마케팅 문서)
+- Prioritize IMPACT and NATURALNESS over literal accuracy
+- Adapt the message to feel native in the target language
+- Use culturally appropriate expressions and idioms
+- Make the text persuasive and engaging
+- Capture the FEELING and EMOTION of the original
+- Localize metaphors and cultural references
+- Use dynamic, compelling language that resonates with the target audience"""
+
         system_prompt = f"""You are a professional translator. Translate the following texts from {source_name} to {target_name}.
 
 These texts are all from the same presentation slide, so maintain consistency in terminology and style.
+
+{style_instructions}
 
 CRITICAL RULES:
 1. Return ONLY a JSON object mapping the number to the translation

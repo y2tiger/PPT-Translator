@@ -243,6 +243,68 @@ header h1 {
     opacity: 0.8;
 }
 
+/* Translation Style Options */
+.style-options {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+
+.style-option {
+    flex: 1;
+    cursor: pointer;
+}
+
+.style-option input[type="radio"] {
+    display: none;
+}
+
+.style-card {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    border-radius: 10px;
+    border: 2px solid var(--border-color);
+    background: var(--bg-color);
+    transition: all 0.2s ease;
+}
+
+.style-option input[type="radio"]:checked + .style-card {
+    border-color: var(--primary-color);
+    background: rgba(99, 102, 241, 0.1);
+}
+
+.style-option:hover .style-card {
+    border-color: var(--primary-color);
+}
+
+.style-icon {
+    font-size: 1.5rem;
+}
+
+.style-info {
+    display: flex;
+    flex-direction: column;
+}
+
+.style-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    font-size: 0.95rem;
+}
+
+.style-desc {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+@media (max-width: 500px) {
+    .style-options {
+        flex-direction: column;
+    }
+}
+
 /* Agent Info */
 .agent-info {
     background: rgba(99, 102, 241, 0.1);

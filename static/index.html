@@ -55,6 +55,31 @@
                         <span id="target-font-desc" class="hint">번역된 텍스트에 적용할 폰트</span>
                     </div>
                     <div class="option-group option-full">
+                        <label for="translation-style">번역 스타일</label>
+                        <div class="style-options">
+                            <label class="style-option">
+                                <input type="radio" name="translation-style" value="technical" checked>
+                                <div class="style-card">
+                                    <span class="style-icon">📋</span>
+                                    <div class="style-info">
+                                        <span class="style-name">기술 문서</span>
+                                        <span class="style-desc">정확한 직역, 기술 용어 유지</span>
+                                    </div>
+                                </div>
+                            </label>
+                            <label class="style-option">
+                                <input type="radio" name="translation-style" value="marketing">
+                                <div class="style-card">
+                                    <span class="style-icon">🎯</span>
+                                    <div class="style-info">
+                                        <span class="style-name">마케팅 문서</span>
+                                        <span class="style-desc">자연스러운 의역, 문화적 적응</span>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="option-group option-full">
                         <label class="checkbox-label">
                             <input type="checkbox" id="enable-visual-qa" checked>
                             <span>Visual QA 사용</span>
