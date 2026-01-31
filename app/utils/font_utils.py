@@ -3,6 +3,7 @@ import subprocess
 import structlog
 from pathlib import Path
 from pptx import Presentation
+from pptx.shapes.group import GroupShape
 from pptx.util import Pt
 from pptx.dml.color import RGBColor
 
@@ -125,14 +126,17 @@ def extract_fonts_from_ppt(ppt_path: str) -> set[str]:
         return set()
 
 
-def _extract_fonts_from_shape(shape) -> set[str]:
+def _extract_fonts_from_shape(shape, depth: int = 0) -> set[str]:
     """Extract fonts from a single shape (recursive for groups)."""
     fonts = set()
 
-    # Handle grouped shapes
-    if shape.shape_type == 6:  # MSO_SHAPE_TYPE.GROUP
-        for child_shape in shape.shapes:
-            fonts.update(_extract_fonts_from_shape(child_shape))
+    # Handle grouped shapes (with depth limit to prevent infinite loops)
+    if isinstance(shape, GroupShape) and depth < 10:
+        try:
+            for child_shape in shape.shapes:
+                fonts.update(_extract_fonts_from_shape(child_shape, depth + 1))
+        except Exception:
+            pass
         return fonts
 
     # Handle text frames
@@ -195,12 +199,15 @@ def apply_font_to_ppt(ppt_path: str, output_path: str, target_font: str) -> bool
         return False
 
 
-def _apply_font_to_shape(shape, target_font: str):
+def _apply_font_to_shape(shape, target_font: str, depth: int = 0):
     """Apply font to a single shape (recursive for groups)."""
-    # Handle grouped shapes
-    if shape.shape_type == 6:  # MSO_SHAPE_TYPE.GROUP
-        for child_shape in shape.shapes:
-            _apply_font_to_shape(child_shape, target_font)
+    # Handle grouped shapes (with depth limit)
+    if isinstance(shape, GroupShape) and depth < 10:
+        try:
+            for child_shape in shape.shapes:
+                _apply_font_to_shape(child_shape, target_font, depth + 1)
+        except Exception:
+            pass
         return
 
     # Handle text frames
