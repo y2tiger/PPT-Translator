@@ -212,6 +212,7 @@ class PPTService:
         be very aggressive with manual font reduction to prevent truncation.
         """
         if not original or not translated:
+            logger.info("ratio_calc_empty", original_len=len(original) if original else 0, translated_len=len(translated) if translated else 0)
             return 1.0
 
         # Count Korean characters in original
@@ -230,31 +231,74 @@ class PPTService:
         else:
             width_ratio = len(translated) / max(len(original), 1)
 
-        # If translated text is visually wider, reduce font size
-        if width_ratio > 1.0:
+        # Log calculation details for debugging
+        logger.info(
+            "ratio_calculation",
+            original=original[:30],
+            translated=translated[:30],
+            korean_chars=korean_char_count,
+            orig_len=len(original),
+            trans_len=len(translated),
+            orig_eff_width=round(original_effective_width, 1),
+            width_ratio=round(width_ratio, 3),
+        )
+
+        # IMPORTANT: For short Korean labels translated to Latin scripts,
+        # even if width_ratio ~= 1.0, we may still need reduction because:
+        # 1. Korean text boxes are sized for Korean fonts
+        # 2. Latin fonts have different spacing characteristics
+        # 3. PowerPoint's text boxes don't always match our calculations
+        # Force reduction for short labels with mostly Korean original text
+        force_reduction = False
+        if korean_char_count > 0 and len(original) <= 6:
+            # Short Korean labels (1-6 chars) almost always need reduction
+            # even if our calculation says they're equal width
+            force_reduction = True
+            logger.info(
+                "force_reduction_short_korean",
+                original=original,
+                translated=translated,
+                reason="short_korean_label",
+            )
+
+        # If translated text is visually wider OR force reduction for short Korean labels
+        if width_ratio > 1.0 or force_reduction:
+            # Use width_ratio for calculation, but for force_reduction cases
+            # where width_ratio <= 1.0, use a minimum effective ratio
+            effective_width_ratio = max(width_ratio, 1.2) if force_reduction else width_ratio
+
             # VERY aggressive formula - use power of 0.85 for direct proportion
             # For width_ratio 1.5: ~0.70 (70%)
             # For width_ratio 2.0: ~0.55 (55%)
             # For width_ratio 2.5: ~0.46 (46%)
             # For width_ratio 3.0: ~0.39 (39%)
-            size_ratio = 1.0 / (width_ratio ** 0.85)
+            size_ratio = 1.0 / (effective_width_ratio ** 0.85)
 
             # For short original text (diagram labels in small boxes)
             # These need EXTREME reduction as the boxes are tiny
             if len(original) <= 5:
                 # Extremely aggressive for very short labels
-                size_ratio = 1.0 / (width_ratio ** 0.95)
+                size_ratio = 1.0 / (effective_width_ratio ** 0.95)
                 size_ratio = max(0.30, size_ratio)  # Allow down to 30%
+                # For forced reduction on very short text, be even more aggressive
+                if force_reduction and size_ratio > 0.7:
+                    size_ratio = 0.65  # Force at least 35% reduction
+                logger.info("ratio_short_text", orig_len=len(original), final_ratio=round(size_ratio, 3), category="<=5", forced=force_reduction)
             elif len(original) <= 10:
                 # Very aggressive for short labels
-                size_ratio = 1.0 / (width_ratio ** 0.90)
+                size_ratio = 1.0 / (effective_width_ratio ** 0.90)
                 size_ratio = max(0.35, size_ratio)  # Allow down to 35%
+                if force_reduction and size_ratio > 0.75:
+                    size_ratio = 0.70  # Force at least 30% reduction
+                logger.info("ratio_short_text", orig_len=len(original), final_ratio=round(size_ratio, 3), category="<=10", forced=force_reduction)
             else:
                 # Normal text
                 size_ratio = max(0.40, size_ratio)  # Allow down to 40%
+                logger.info("ratio_normal_text", orig_len=len(original), final_ratio=round(size_ratio, 3), category=">10")
 
             return size_ratio
 
+        logger.info("ratio_no_reduction", width_ratio=round(width_ratio, 3), reason="width_ratio_lte_1")
         return 1.0
 
     def _apply_to_shape(
@@ -266,6 +310,9 @@ class PPTService:
         depth: int = 0
     ):
         """Apply translations to a single shape at paragraph level."""
+        shape_type = str(getattr(shape, 'shape_type', 'unknown'))
+        shape_id = getattr(shape, 'shape_id', 'unknown')
+
         # Handle group shapes recursively (up to depth 10)
         if isinstance(shape, GroupShape) and depth < 10:
             try:
@@ -284,13 +331,20 @@ class PPTService:
                 para_text = paragraph.text.strip()
                 if para_text in translations:
                     translated = translations[para_text]
-                    logger.debug(
-                        "translation_applied",
-                        original=para_text[:30],
-                        translated=translated[:30],
-                    )
                     # Calculate font size reduction ratio
                     size_ratio = self._calculate_font_size_ratio(para_text, translated)
+
+                    # INFO level log for production visibility
+                    logger.info(
+                        "applying_translation",
+                        shape_id=shape_id,
+                        shape_type=shape_type,
+                        original=para_text[:40],
+                        translated=translated[:40],
+                        size_ratio=round(size_ratio, 3),
+                        has_runs=len(paragraph.runs) > 0,
+                        run_count=len(paragraph.runs),
+                    )
 
                     # Put all translated text in first run, clear others
                     if paragraph.runs:
@@ -313,8 +367,9 @@ class PPTService:
                                 # Ensure minimum readable size (6pt)
                                 new_pt = max(6.0, new_pt)
                                 _apply_font_size(first_run, new_pt)
-                                logger.debug(
-                                    "font_size_reduced",
+                                logger.info(
+                                    "font_reduced",
+                                    text=translated[:20],
                                     original_pt=round(original_pt, 1),
                                     new_pt=round(new_pt, 1),
                                     ratio=round(size_ratio, 2),
@@ -329,11 +384,20 @@ class PPTService:
                                 else:
                                     default_pt = 10.0
                                 _apply_font_size(first_run, default_pt)
-                                logger.debug(
-                                    "font_size_default_applied",
+                                logger.info(
+                                    "font_default_applied",
+                                    text=translated[:20],
                                     default_pt=default_pt,
-                                    text_len=len(translated),
+                                    reason="no_original_size_found",
                                 )
+                        else:
+                            # size_ratio >= 1.0, no reduction needed
+                            logger.info(
+                                "font_no_reduction",
+                                text=translated[:20],
+                                size_ratio=round(size_ratio, 3),
+                                reason="ratio_gte_1",
+                            )
 
                         # Clear remaining runs
                         for run in paragraph.runs[1:]:
@@ -343,12 +407,38 @@ class PPTService:
 
                         # Track successful application
                         applied_tracker[para_text] = True
+                    else:
+                        # No runs in paragraph - need to add text directly
+                        logger.warning(
+                            "no_runs_in_paragraph",
+                            shape_id=shape_id,
+                            shape_type=shape_type,
+                            text=para_text[:30],
+                        )
+                        # Try to add a run
+                        try:
+                            run = paragraph.add_run()
+                            run.text = translated
+                            run.font.name = target_font
+                            if size_ratio < 1.0:
+                                # Apply a default small font for short labels
+                                if len(translated) <= 10:
+                                    _apply_font_size(run, 8.0)
+                                elif len(translated) <= 20:
+                                    _apply_font_size(run, 9.0)
+                                else:
+                                    _apply_font_size(run, 10.0)
+                            applied_tracker[para_text] = True
+                            logger.info("run_added_successfully", text=translated[:20])
+                        except Exception as e:
+                            logger.error("add_run_failed", error=str(e))
+                            applied_tracker[para_text] = False
                 elif para_text:
                     # Log texts that weren't found in translations
                     logger.debug(
                         "translation_not_found",
                         text=para_text[:50],
-                        shape_id=getattr(shape, 'shape_id', 'unknown'),
+                        shape_id=shape_id,
                     )
                     applied_tracker[para_text] = False
 
