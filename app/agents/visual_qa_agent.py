@@ -372,7 +372,12 @@ Return as JSON:
             translated_dir.mkdir()
 
             # Step 1: Convert PPTs to PDFs (one time only)
-            logger.info("converting_ppts_to_pdf")
+            logger.info(
+                "converting_ppts_to_pdf",
+                original_ppt_path=original_ppt_path,
+                translated_ppt_path=translated_ppt_path,
+                iteration=iteration,
+            )
             original_pdf = self._ppt_to_pdf(original_ppt_path, original_dir)
             translated_pdf = self._ppt_to_pdf(translated_ppt_path, translated_dir)
 

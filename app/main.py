@@ -485,6 +485,23 @@ async def process_translation(
                 ppt_service = PPTService(str(file_path))
                 _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
 
+                # Log paths being used for Visual QA comparison
+                import hashlib
+                orig_hash = hashlib.md5(file_path.read_bytes()).hexdigest()[:8] if file_path.exists() else "none"
+                trans_hash = hashlib.md5(output_path.read_bytes()).hexdigest()[:8] if output_path.exists() else "none"
+                logger.info(
+                    "visual_qa_paths",
+                    file_id=file_id,
+                    iteration=visual_iteration,
+                    original_path=str(file_path),
+                    translated_path=str(output_path),
+                    original_exists=file_path.exists(),
+                    translated_exists=output_path.exists(),
+                    original_hash=orig_hash,
+                    translated_hash=trans_hash,
+                    files_are_same=(orig_hash == trans_hash),
+                )
+
                 # Note: Font is applied AFTER all Visual QA iterations for fair comparison
                 # Both original and translated use their original fonts during comparison
 
