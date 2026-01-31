@@ -1,4 +1,5 @@
 import gc
+import logging
 import os
 import re
 import uuid
@@ -34,6 +35,9 @@ from app.utils.font_utils import (
 MAX_QA_ITERATIONS = 3
 MAX_VISUAL_ITERATIONS = 2  # Visual comparison iterations
 VISUAL_QA_QUALITY_THRESHOLD = 95  # Score threshold to pass (raised from 85)
+
+# Set logging level to INFO to see font processing logs
+logging.basicConfig(level=logging.INFO)
 
 # Configure structured logging
 structlog.configure(
