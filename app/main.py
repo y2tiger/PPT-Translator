@@ -23,6 +23,7 @@ from app.agents.translator import TranslatorAgent
 from app.agents.qa_agent import QAAgent
 from app.agents.diagnostic_agent import DiagnosticAgent, IssueSeverity
 from app.agents.visual_qa_agent import VisualQAAgent
+from app.utils.font_utils import check_missing_fonts, create_libreoffice_font_substitution
 
 # QA loop settings
 MAX_QA_ITERATIONS = 3
@@ -65,6 +66,15 @@ async def lifespan(app: FastAPI):
         logger.info("Application started", api_key_configured=True)
 
     UPLOAD_DIR.mkdir(exist_ok=True)
+
+    # Set up LibreOffice font substitution
+    try:
+        font_config_path = create_libreoffice_font_substitution()
+        if font_config_path:
+            logger.info("libreoffice_font_substitution_configured", path=font_config_path)
+    except Exception as e:
+        logger.warning("libreoffice_font_config_failed", error=str(e))
+
     yield
 
     # Shutdown
@@ -215,11 +225,16 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         slide_count = ppt_service.get_slide_count()
         texts = ppt_service.get_all_texts()
 
+        # Check fonts used in PPT
+        font_info = check_missing_fonts(str(file_path))
+
         logger.info(
             "file_upload_completed",
             file_id=file_id,
             slide_count=slide_count,
             text_count=len(texts),
+            fonts_used=font_info.get("used_fonts", []),
+            fonts_missing=font_info.get("missing_fonts", []),
         )
     except Exception as e:
         logger.error("file_processing_failed", file_id=file_id, error=str(e))
@@ -234,6 +249,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
         "filename": file.filename,
         "slide_count": slide_count,
         "text_count": len(texts),
+        "font_info": font_info,
     }
 
 

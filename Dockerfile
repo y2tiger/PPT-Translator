@@ -1,11 +1,20 @@
 FROM python:3.11-slim
 
-# Install LibreOffice, poppler-utils, and Korean/CJK fonts for PPT to image conversion
+# Install LibreOffice, poppler-utils, and fonts for PPT to image conversion
 RUN apt-get update && apt-get install -y \
     libreoffice \
     poppler-utils \
+    fontconfig \
+    # Korean fonts
     fonts-nanum \
+    fonts-nanum-coding \
+    fonts-nanum-extra \
     fonts-noto-cjk \
+    fonts-noto-cjk-extra \
+    # Common fonts
+    fonts-liberation \
+    fonts-dejavu \
+    fonts-freefont-ttf \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && fc-cache -fv
