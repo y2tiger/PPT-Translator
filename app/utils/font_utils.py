@@ -34,6 +34,11 @@ AVAILABLE_FONTS = {
         "display_name": "Noto Sans KR (노토 산스)",
         "description": "Google의 다국어 지원 폰트",
     },
+    "trebuchet_ms": {
+        "name": "Trebuchet MS",
+        "display_name": "Trebuchet MS",
+        "description": "깔끔한 산세리프 영문 폰트",
+    },
     "original": {
         "name": None,  # Keep original font
         "display_name": "원본 유지",
