@@ -76,6 +76,7 @@ class VisualQAReport:
     critical_issues: list[VisualIssue] = field(default_factory=list)
     algorithm_improvements: list[str] = field(default_factory=list)
     texts_to_retranslate: list[str] = field(default_factory=list)
+    texts_with_formatting_issues: list[str] = field(default_factory=list)  # FONT_SIZE, TRUNCATION issues
 
 
 class VisualQAAgent:
@@ -503,6 +504,13 @@ Return as JSON:
                 if i.issue_type == "untranslated" and i.original_text
             ]
 
+            # Extract texts with formatting issues (overflow, truncation, font_size)
+            formatting_issue_types = {"overflow", "text_overflow", "truncation", "font_size", "layout"}
+            texts_with_formatting_issues = list(set([
+                i.original_text for i in all_issues
+                if i.issue_type in formatting_issue_types and i.original_text
+            ]))
+
             # Deduplicate suggestions
             unique_suggestions = list(set(all_suggestions))
 
@@ -515,6 +523,7 @@ Return as JSON:
                 critical_issues=critical_issues,
                 algorithm_improvements=unique_suggestions,
                 texts_to_retranslate=texts_to_retranslate,
+                texts_with_formatting_issues=texts_with_formatting_issues,
             )
 
             logger.info(

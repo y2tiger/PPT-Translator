@@ -32,7 +32,7 @@ from app.utils.font_utils import (
 # QA loop settings
 MAX_QA_ITERATIONS = 3
 MAX_VISUAL_ITERATIONS = 2  # Visual comparison iterations
-VISUAL_QA_QUALITY_THRESHOLD = 85  # Score threshold to pass
+VISUAL_QA_QUALITY_THRESHOLD = 95  # Score threshold to pass (raised from 85)
 
 # Configure structured logging
 structlog.configure(
@@ -567,12 +567,17 @@ async def process_translation(
                             suggestions=sc.algorithm_suggestions,
                         ))
 
+                    # Check for formatting issues (FONT_SIZE, TRUNCATION, etc.)
+                    has_formatting_issues = len(getattr(visual_report, 'texts_with_formatting_issues', [])) > 0
+                    formatting_issues_count = len(getattr(visual_report, 'texts_with_formatting_issues', []))
+
                     qa_iteration_response = QAIterationResponse(
                         iteration=visual_iteration,
                         overall_score=visual_report.overall_score,
                         total_slides=visual_report.total_slides,
                         critical_issues_count=len(visual_report.critical_issues),
                         texts_retranslated=len(visual_report.texts_to_retranslate),
+                        formatting_issues_count=formatting_issues_count,
                         algorithm_improvements=visual_report.algorithm_improvements,
                         slide_comparisons=slide_comparisons_response,
                     )
@@ -580,8 +585,17 @@ async def process_translation(
 
                     best_score = max(best_score, visual_report.overall_score)
 
-                    # Check if quality is good enough
-                    if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD:
+                    if has_formatting_issues:
+                        logger.info(
+                            "formatting_issues_detected",
+                            file_id=file_id,
+                            iteration=visual_iteration,
+                            count=formatting_issues_count,
+                            texts=visual_report.texts_with_formatting_issues[:5],  # Log first 5
+                        )
+
+                    # Check if quality is good enough AND no formatting issues
+                    if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD and not has_formatting_issues:
                         logger.info(
                             "visual_qa_passed",
                             file_id=file_id,
@@ -590,7 +604,19 @@ async def process_translation(
                         )
                         break
 
+                    # If score is good but has formatting issues, log and continue to apply fixes
+                    if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD and has_formatting_issues:
+                        logger.info(
+                            "visual_qa_continuing_for_formatting",
+                            file_id=file_id,
+                            iteration=visual_iteration,
+                            score=visual_report.overall_score,
+                            formatting_issues=formatting_issues_count,
+                        )
+
                     # Get retranslations for problematic texts
+                    has_work_to_do = False
+
                     if visual_report.texts_to_retranslate:
                         translation_status[file_id] = TranslationStatus(
                             status="processing",
@@ -609,22 +635,34 @@ async def process_translation(
 
                         if retranslations:
                             all_translations.update(retranslations)
+                            has_work_to_do = True
                             logger.info(
                                 "visual_retranslations_applied",
                                 file_id=file_id,
                                 iteration=visual_iteration,
                                 count=len(retranslations),
                             )
-                        else:
-                            # No improvements possible
-                            logger.warning(
-                                "no_visual_improvements",
-                                file_id=file_id,
-                                iteration=visual_iteration,
-                            )
-                            break
-                    else:
-                        # No texts to retranslate, we're done
+
+                    # If we have formatting issues, that counts as "work to do" for next iteration
+                    # The next iteration will re-apply translations with the already-aggressive font reduction
+                    if has_formatting_issues:
+                        has_work_to_do = True
+                        translation_status[file_id] = TranslationStatus(
+                            status="processing",
+                            progress=70 + (visual_iteration * 5) + 4,
+                            total_slides=total_slides,
+                            current_slide=total_slides,
+                            review_loop=visual_iteration,
+                            message=f"시각적 품질 검증 {visual_iteration}회차: {formatting_issues_count}개 포맷 이슈 재처리 중...",
+                        )
+
+                    if not has_work_to_do:
+                        # No improvements possible
+                        logger.warning(
+                            "no_visual_improvements",
+                            file_id=file_id,
+                            iteration=visual_iteration,
+                        )
                         break
 
                 except Exception as visual_error:
