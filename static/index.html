@@ -80,11 +80,14 @@
                         </div>
                     </div>
                     <div class="option-group option-full">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="enable-visual-qa" checked>
-                            <span>Visual QA 사용</span>
-                        </label>
-                        <span class="hint">시각적 품질 검증 (처리 시간이 길어지지만 품질 향상)</span>
+                        <label for="visual-qa-iterations">Visual QA 반복 횟수</label>
+                        <select id="visual-qa-iterations">
+                            <option value="0">사용 안함</option>
+                            <option value="1">1회</option>
+                            <option value="2" selected>2회 (권장)</option>
+                            <option value="3">3회</option>
+                        </select>
+                        <span class="hint">시각적 품질 검증 횟수 (0=사용안함, 높을수록 품질↑ 시간↑)</span>
                     </div>
                 </div>
                 <div class="agent-info">

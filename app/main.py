@@ -279,7 +279,7 @@ async def process_translation(
     source_lang: Language,
     target_lang: Language,
     target_font: str | None = None,
-    enable_visual_qa: bool = True,
+    visual_qa_iterations: int = 2,
     translation_style: TranslationStyle = TranslationStyle.TECHNICAL,
 ):
     """Background task for translation processing with slide-based context."""
@@ -289,6 +289,7 @@ async def process_translation(
         source=source_lang.value,
         target=target_lang.value,
         target_font=target_font or DEFAULT_KOREAN_FONT,
+        visual_qa_iterations=visual_qa_iterations,
         translation_style=translation_style.value,
     )
 
@@ -454,17 +455,18 @@ async def process_translation(
         # Visual QA Loop - Compare images and iteratively improve (optional)
         qa_history[file_id] = []
 
-        if not enable_visual_qa:
+        if visual_qa_iterations <= 0:
             logger.info("visual_qa_disabled", file_id=file_id)
         else:
             visual_qa_agent = VisualQAAgent(api_key)
             best_score = 0
+            max_iterations = min(visual_qa_iterations, 3)  # Cap at 3
 
             # Create directory for QA images
             qa_images_dir = UPLOAD_DIR / f"{file_id}_qa"
             qa_images_dir.mkdir(exist_ok=True)
 
-            for visual_iteration in range(1, MAX_VISUAL_ITERATIONS + 1):
+            for visual_iteration in range(1, max_iterations + 1):
                 # Apply current translations
                 translation_status[file_id] = TranslationStatus(
                     status="processing",
@@ -472,7 +474,7 @@ async def process_translation(
                     total_slides=total_slides,
                     current_slide=total_slides,
                     review_loop=visual_iteration,
-                    message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: PPT 생성 중...",
+                    message=f"시각적 품질 검증 {visual_iteration}/{max_iterations}회차: PPT 생성 중...",
                 )
 
                 # Re-create PPT service for fresh state
@@ -489,7 +491,7 @@ async def process_translation(
                     total_slides=total_slides,
                     current_slide=total_slides,
                     review_loop=visual_iteration,
-                    message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: 이미지 비교 준비 중...",
+                    message=f"시각적 품질 검증 {visual_iteration}/{max_iterations}회차: 이미지 비교 준비 중...",
                 )
 
                 # Progress callback for Visual QA batch processing
@@ -500,7 +502,7 @@ async def process_translation(
                         total_slides=total_slides,
                         current_slide=total_slides,
                         review_loop=visual_iteration,
-                        message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: 배치 {batch_num}/{total_batches} (슬라이드 {slide_num}-{min(slide_num+2, total_qa_slides)}/{total_qa_slides})",
+                        message=f"시각적 품질 검증 {visual_iteration}/{max_iterations}회차: 배치 {batch_num}/{total_batches} (슬라이드 {slide_num}-{min(slide_num+2, total_qa_slides)}/{total_qa_slides})",
                     )
 
                 try:
@@ -763,7 +765,7 @@ async def start_translation(
     source_language: str = Form(...),
     target_language: str = Form(...),
     target_font: str = Form("pretendard"),
-    enable_visual_qa: str = Form("true"),
+    visual_qa_iterations: str = Form("2"),
     translation_style: str = Form("technical"),
 ):
     """Start translation process."""
@@ -805,8 +807,12 @@ async def start_translation(
         message="번역 대기 중...",
     )
 
-    # Parse enable_visual_qa (form sends string)
-    visual_qa_enabled = enable_visual_qa.lower() == "true"
+    # Parse visual_qa_iterations (form sends string)
+    try:
+        qa_iterations = int(visual_qa_iterations)
+        qa_iterations = max(0, min(3, qa_iterations))  # Clamp between 0-3
+    except ValueError:
+        qa_iterations = 2  # Default
 
     # Start background task
     background_tasks.add_task(
@@ -815,11 +821,11 @@ async def start_translation(
         source_lang,
         target_lang,
         font_name,
-        visual_qa_enabled,
+        qa_iterations,
         style,
     )
 
-    logger.info("translation_queued", file_id=file_id, target_font=target_font, visual_qa=visual_qa_enabled, style=style.value)
+    logger.info("translation_queued", file_id=file_id, target_font=target_font, visual_qa_iterations=qa_iterations, style=style.value)
     return {"message": "번역이 시작되었습니다", "file_id": file_id}
 
 

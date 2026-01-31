@@ -36,8 +36,8 @@ function setupOptionChangeListeners() {
     // Font select
     targetFontSelect.addEventListener('change', saveOptionsToLocalStorage);
 
-    // Visual QA checkbox
-    document.getElementById('enable-visual-qa').addEventListener('change', saveOptionsToLocalStorage);
+    // Visual QA iterations dropdown
+    document.getElementById('visual-qa-iterations').addEventListener('change', saveOptionsToLocalStorage);
 
     // Translation style radio buttons
     document.querySelectorAll('input[name="translation-style"]').forEach(radio => {
@@ -51,7 +51,7 @@ function saveOptionsToLocalStorage() {
         sourceLang: sourceLangSelect.value,
         targetLang: targetLangSelect.value,
         targetFont: targetFontSelect.value,
-        enableVisualQA: document.getElementById('enable-visual-qa').checked,
+        visualQaIterations: document.getElementById('visual-qa-iterations').value,
         translationStyle: document.querySelector('input[name="translation-style"]:checked')?.value || 'technical',
     };
     localStorage.setItem('ppt-translator-options', JSON.stringify(options));
@@ -76,8 +76,12 @@ function loadOptionsFromLocalStorage() {
             if (options.targetFont) {
                 targetFontSelect.value = options.targetFont;
             }
-            if (typeof options.enableVisualQA === 'boolean') {
-                document.getElementById('enable-visual-qa').checked = options.enableVisualQA;
+            // Handle both old boolean format and new iteration count format
+            if (options.visualQaIterations !== undefined) {
+                document.getElementById('visual-qa-iterations').value = options.visualQaIterations;
+            } else if (typeof options.enableVisualQA === 'boolean') {
+                // Migrate old format: true -> 2, false -> 0
+                document.getElementById('visual-qa-iterations').value = options.enableVisualQA ? '2' : '0';
             }
             if (options.translationStyle) {
                 const styleRadio = document.querySelector(`input[name="translation-style"][value="${options.translationStyle}"]`);
@@ -367,7 +371,7 @@ async function startTranslation() {
     const sourceLang = sourceLangSelect.value;
     const targetLang = targetLangSelect.value;
     const targetFont = targetFontSelect.value;
-    const enableVisualQA = document.getElementById('enable-visual-qa').checked;
+    const visualQaIterations = parseInt(document.getElementById('visual-qa-iterations').value) || 0;
     const translationStyle = document.querySelector('input[name="translation-style"]:checked')?.value || 'technical';
 
     if (!sourceLang || !targetLang) {
@@ -410,7 +414,7 @@ async function startTranslation() {
         addActivityLog(`파일 ${i + 1}/${uploadedFiles.length} 번역 시작: ${uploadedFiles[i].filename}`);
 
         try {
-            await processFile(uploadedFiles[i], sourceLang, targetLang, targetFont, enableVisualQA, translationStyle);
+            await processFile(uploadedFiles[i], sourceLang, targetLang, targetFont, visualQaIterations, translationStyle);
             uploadedFiles[i].status = 'completed';
             addActivityLog(`파일 ${i + 1}/${uploadedFiles.length} 완료: ${uploadedFiles[i].filename}`);
         } catch (error) {
@@ -426,12 +430,12 @@ async function startTranslation() {
 }
 
 // Process a single file
-async function processFile(file, sourceLang, targetLang, targetFont, enableVisualQA, translationStyle) {
+async function processFile(file, sourceLang, targetLang, targetFont, visualQaIterations, translationStyle) {
     const formData = new FormData();
     formData.append('source_language', sourceLang);
     formData.append('target_language', targetLang);
     formData.append('target_font', targetFont);
-    formData.append('enable_visual_qa', enableVisualQA ? 'true' : 'false');
+    formData.append('visual_qa_iterations', visualQaIterations.toString());
     formData.append('translation_style', translationStyle);
 
     const response = await fetch(`/api/translate/${file.fileId}`, {
