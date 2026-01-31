@@ -18,7 +18,7 @@ class PPTService:
     def _extract_from_shape(self, shape, slide_idx: int, depth: int = 0) -> Generator[dict, None, None]:
         """Extract text from a single shape at paragraph level for better context."""
         # Handle group shapes recursively (up to depth 10 to prevent infinite loops)
-        if isinstance(shape, GroupShape) or (hasattr(shape, 'shapes') and depth < 10):
+        if isinstance(shape, GroupShape) and depth < 10:
             try:
                 for child_shape in shape.shapes:
                     yield from self._extract_from_shape(child_shape, slide_idx, depth + 1)
@@ -146,7 +146,7 @@ class PPTService:
     ):
         """Apply translations to a single shape at paragraph level."""
         # Handle group shapes recursively (up to depth 10)
-        if isinstance(shape, GroupShape) or (hasattr(shape, 'shapes') and depth < 10):
+        if isinstance(shape, GroupShape) and depth < 10:
             try:
                 for child_shape in shape.shapes:
                     self._apply_to_shape(child_shape, translations, applied_tracker, target_font, depth + 1)
