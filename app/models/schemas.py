@@ -66,10 +66,10 @@ class TranslationStatus(BaseModel):
 class VisualIssueResponse(BaseModel):
     slide_number: int
     issue_type: str
-    description: str
-    original_text: str
-    suggestion: str
-    severity: str
+    description: str = ""
+    original_text: str = ""
+    suggestion: str = ""
+    severity: str = "warning"
 
 
 class SlideComparisonResponse(BaseModel):
