@@ -120,7 +120,11 @@ class PPTService:
         return len(self.presentation.slides)
 
     def _calculate_font_size_ratio(self, original: str, translated: str) -> float:
-        """Calculate font size ratio based on text length difference."""
+        """Calculate font size ratio based on text length difference.
+
+        Korean text is typically more compact than European languages.
+        Polish translations are often 1.5-2.5x longer than Korean originals.
+        """
         if not original or not translated:
             return 1.0
 
@@ -129,9 +133,20 @@ class PPTService:
 
         # If translated text is longer, reduce font size proportionally
         if len_ratio > 1.0:
-            # Cap the reduction at 0.6 (60% of original size)
-            # Formula: size_ratio = 1 / sqrt(len_ratio), capped at 0.6
-            size_ratio = max(0.6, 1.0 / (len_ratio ** 0.5))
+            # More aggressive reduction formula
+            # For len_ratio 1.5: ~0.82 (82%)
+            # For len_ratio 2.0: ~0.71 (71%)
+            # For len_ratio 3.0: ~0.58 (58%)
+            # For len_ratio 4.0: ~0.50 (50%)
+            size_ratio = 1.0 / (len_ratio ** 0.5)
+
+            # Cap at 50% minimum (very aggressive but prevents unreadable text)
+            size_ratio = max(0.5, size_ratio)
+
+            # For short original text (likely titles/headers), be less aggressive
+            if len(original) < 10:
+                size_ratio = max(0.7, size_ratio)
+
             return size_ratio
 
         return 1.0
