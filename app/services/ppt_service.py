@@ -28,6 +28,31 @@ def _reset_character_spacing(run):
         logger.debug("reset_spacing_failed", error=str(e))
 
 
+def _apply_aggressive_autofit(text_frame):
+    """
+    Apply aggressive auto-fit settings to a text frame.
+    This makes the text shrink to fit within the shape boundaries.
+    """
+    try:
+        # Set auto-size to shrink text to fit the shape
+        text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+
+        # Reduce margins to give more space for text
+        # Margins are in EMUs (914400 EMUs = 1 inch)
+        # Setting to ~0.05 inch margins
+        text_frame.margin_left = 45720   # ~0.05 inch
+        text_frame.margin_right = 45720
+        text_frame.margin_top = 45720
+        text_frame.margin_bottom = 45720
+
+        # Enable word wrap to prevent text overflow
+        text_frame.word_wrap = True
+
+        logger.debug("autofit_applied")
+    except Exception as e:
+        logger.debug("autofit_failed", error=str(e))
+
+
 class PPTService:
     """Service for handling PowerPoint file operations."""
 
@@ -143,29 +168,50 @@ class PPTService:
         """Calculate font size ratio based on text length difference.
 
         Korean text is typically more compact than European languages.
-        Polish translations are often 1.5-2.5x longer than Korean originals.
+        Polish translations are often 2-6x longer than Korean originals.
+
+        Key insight: Korean characters are wider than Latin characters,
+        so even if the character count ratio is 3:1, the visual width ratio
+        is often closer to 1.5:1. We need to account for this.
         """
         if not original or not translated:
             return 1.0
 
-        # Calculate length ratio
-        len_ratio = len(translated) / len(original)
+        # Count Korean characters in original
+        korean_char_count = sum(1 for c in original if '\uAC00' <= c <= '\uD7A3' or '\u1100' <= c <= '\u11FF')
 
-        # If translated text is longer, reduce font size proportionally
-        if len_ratio > 1.0:
-            # More aggressive reduction formula
-            # For len_ratio 1.5: ~0.82 (82%)
-            # For len_ratio 2.0: ~0.71 (71%)
-            # For len_ratio 3.0: ~0.58 (58%)
-            # For len_ratio 4.0: ~0.50 (50%)
-            size_ratio = 1.0 / (len_ratio ** 0.5)
+        # Calculate effective width ratio
+        # Korean characters are roughly 1.8x wider than Latin characters
+        # So "광학" (2 chars) ≈ "LENS" (4 chars) in visual width
+        korean_width_factor = 1.8
+        original_effective_width = (korean_char_count * korean_width_factor) + (len(original) - korean_char_count)
+        translated_effective_width = len(translated)  # Latin chars are narrower
 
-            # Cap at 50% minimum (very aggressive but prevents unreadable text)
-            size_ratio = max(0.5, size_ratio)
+        # Calculate width ratio based on effective widths
+        if original_effective_width > 0:
+            width_ratio = translated_effective_width / original_effective_width
+        else:
+            width_ratio = len(translated) / max(len(original), 1)
 
-            # For short original text (likely titles/headers), be less aggressive
-            if len(original) < 10:
-                size_ratio = max(0.7, size_ratio)
+        # If translated text is visually wider, reduce font size
+        if width_ratio > 1.0:
+            # More aggressive formula using power of 0.6 instead of 0.5
+            # For width_ratio 1.5: ~0.74 (74%)
+            # For width_ratio 2.0: ~0.66 (66%)
+            # For width_ratio 2.5: ~0.59 (59%)
+            # For width_ratio 3.0: ~0.54 (54%)
+            size_ratio = 1.0 / (width_ratio ** 0.6)
+
+            # For short original text (diagram labels), be MORE aggressive
+            # These are typically in small constrained boxes
+            if len(original) < 8:
+                # Even more aggressive for short labels
+                size_ratio = 1.0 / (width_ratio ** 0.7)
+                # Allow down to 40% for diagram labels
+                size_ratio = max(0.40, size_ratio)
+            else:
+                # Normal text: cap at 45% minimum
+                size_ratio = max(0.45, size_ratio)
 
             return size_ratio
 
@@ -191,11 +237,8 @@ class PPTService:
 
         # Handle text frames - apply at PARAGRAPH level
         if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
-            # Enable auto-fit for text to shrink if needed
-            try:
-                shape.text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
-            except Exception:
-                pass  # Some shapes don't support auto_size
+            # Apply aggressive auto-fit for text to shrink if needed
+            _apply_aggressive_autofit(shape.text_frame)
 
             for paragraph in shape.text_frame.paragraphs:
                 para_text = paragraph.text.strip()
@@ -255,6 +298,9 @@ class PPTService:
             try:
                 for row in shape.table.rows:
                     for cell in row.cells:
+                        # Apply aggressive auto-fit to table cells
+                        _apply_aggressive_autofit(cell.text_frame)
+
                         for para in cell.text_frame.paragraphs:
                             para_text = para.text.strip()
                             if para_text in translations:
