@@ -485,8 +485,19 @@ async def process_translation(
                     total_slides=total_slides,
                     current_slide=total_slides,
                     review_loop=visual_iteration,
-                    message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: 이미지 비교 중...",
+                    message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: 이미지 비교 준비 중...",
                 )
+
+                # Progress callback for Visual QA batch processing
+                def visual_qa_progress(batch_num, total_batches, slide_num, total_qa_slides):
+                    translation_status[file_id] = TranslationStatus(
+                        status="processing",
+                        progress=70 + (visual_iteration * 5) + 2,
+                        total_slides=total_slides,
+                        current_slide=total_slides,
+                        review_loop=visual_iteration,
+                        message=f"시각적 품질 검증 {visual_iteration}/{MAX_VISUAL_ITERATIONS}회차: 배치 {batch_num}/{total_batches} (슬라이드 {slide_num}-{min(slide_num+2, total_qa_slides)}/{total_qa_slides})",
+                    )
 
                 try:
                     visual_report = await visual_qa_agent.compare_presentations(
@@ -497,6 +508,7 @@ async def process_translation(
                         max_slides=min(5, total_slides),  # Reduced for memory optimization
                         iteration=visual_iteration,
                         output_dir=qa_images_dir,
+                        progress_callback=visual_qa_progress,
                     )
 
                     # Check if visual QA was skipped (LibreOffice not available)

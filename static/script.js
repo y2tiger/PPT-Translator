@@ -506,24 +506,82 @@ async function showAllResults() {
     progressSection.classList.add('hidden');
     resultSection.classList.remove('hidden');
 
-    const completedCount = uploadedFiles.filter(f => f.status === 'completed').length;
-    const errorCount = uploadedFiles.filter(f => f.status === 'error').length;
+    const completedFiles = uploadedFiles.filter(f => f.status === 'completed');
+    const errorFiles = uploadedFiles.filter(f => f.status === 'error');
 
     const stats = document.getElementById('result-stats');
     stats.innerHTML = '';
 
     const summary = document.createElement('p');
-    summary.textContent = `완료: ${completedCount}개, 오류: ${errorCount}개`;
+    summary.textContent = `완료: ${completedFiles.length}개, 오류: ${errorFiles.length}개`;
     stats.appendChild(summary);
 
-    // Update file list to show download buttons
-    updateFileListUI();
+    // Show file list with download buttons in result section
+    const resultFiles = document.getElementById('result-files');
+    resultFiles.innerHTML = '';
+
+    // Completed files
+    completedFiles.forEach(file => {
+        const fileDiv = document.createElement('div');
+        fileDiv.className = 'result-file-item completed';
+        fileDiv.innerHTML = `
+            <div class="result-file-info">
+                <span class="result-file-name">${escapeHtml(file.filename)}</span>
+                <span class="result-file-stats">슬라이드 ${file.slideCount}개</span>
+            </div>
+            <button class="btn-primary btn-download-file" onclick="downloadSingleFile('${file.fileId}')">
+                📥 다운로드
+            </button>
+        `;
+        resultFiles.appendChild(fileDiv);
+    });
+
+    // Error files
+    errorFiles.forEach(file => {
+        const fileDiv = document.createElement('div');
+        fileDiv.className = 'result-file-item error';
+        fileDiv.innerHTML = `
+            <div class="result-file-info">
+                <span class="result-file-name">${escapeHtml(file.filename)}</span>
+                <span class="result-file-error">번역 실패</span>
+            </div>
+        `;
+        resultFiles.appendChild(fileDiv);
+    });
+
+    // Download all button if multiple files completed
+    if (completedFiles.length > 1) {
+        const downloadAllDiv = document.createElement('div');
+        downloadAllDiv.className = 'download-all-container';
+        downloadAllDiv.innerHTML = `
+            <button class="btn-primary btn-download-all" onclick="downloadAllFiles()">
+                📦 모든 파일 다운로드
+            </button>
+        `;
+        resultFiles.appendChild(downloadAllDiv);
+    }
 
     // Load QA history for the last completed file
-    const lastCompleted = uploadedFiles.filter(f => f.status === 'completed').pop();
-    if (lastCompleted) {
+    if (completedFiles.length > 0) {
+        const lastCompleted = completedFiles[completedFiles.length - 1];
         await loadQAHistory(lastCompleted.fileId);
     }
+}
+
+// Download all completed files
+function downloadAllFiles() {
+    const completedFiles = uploadedFiles.filter(f => f.status === 'completed');
+    completedFiles.forEach((file, index) => {
+        // Delay each download slightly to avoid browser blocking
+        setTimeout(() => {
+            const link = document.createElement('a');
+            link.href = `/api/download/${file.fileId}`;
+            link.download = '';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }, index * 500);
+    });
 }
 
 // Load QA history

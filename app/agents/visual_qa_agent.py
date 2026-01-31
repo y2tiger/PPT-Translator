@@ -330,6 +330,7 @@ Return as JSON:
         iteration: int = 1,
         output_dir: Path | None = None,  # Directory to save images for UI
         batch_size: int = 3,  # Process 3 slides at a time to reduce memory
+        progress_callback: callable = None,  # Callback for progress updates
     ) -> VisualQAReport:
         """
         Compare original and translated presentations visually using batch processing.
@@ -343,6 +344,7 @@ Return as JSON:
             iteration: Current iteration number
             output_dir: Directory to save comparison images (for UI display)
             batch_size: Number of slides to process at once (default: 3)
+            progress_callback: Optional callback(batch_num, total_batches, slide_num, total_slides)
 
         Returns:
             VisualQAReport with issues and improvement suggestions
@@ -385,7 +387,9 @@ Return as JSON:
                 logger.error("no_pages_found")
                 return VisualQAReport(total_slides=0)
 
-            logger.info("batch_processing_start", total_slides=num_slides, batch_size=batch_size)
+            # Calculate total batches for progress reporting
+            total_batches = (num_slides + batch_size - 1) // batch_size
+            logger.info("batch_processing_start", total_slides=num_slides, batch_size=batch_size, total_batches=total_batches)
 
             # Create iteration directory for saving images if output_dir provided
             iter_dir = None
@@ -399,10 +403,19 @@ Return as JSON:
             all_suggestions = []
             total_score = 0
             slide_comparisons = []
+            current_batch = 0
 
             for batch_start in range(1, num_slides + 1, batch_size):
+                current_batch += 1
                 batch_end = min(batch_start + batch_size - 1, num_slides)
-                logger.info("processing_batch", batch_start=batch_start, batch_end=batch_end)
+                logger.info("processing_batch", batch=current_batch, total_batches=total_batches, batch_start=batch_start, batch_end=batch_end)
+
+                # Call progress callback if provided
+                if progress_callback:
+                    try:
+                        progress_callback(current_batch, total_batches, batch_start, num_slides)
+                    except Exception as e:
+                        logger.debug("progress_callback_error", error=str(e))
 
                 # Create batch directories
                 batch_orig_dir = tmpdir_path / f"batch_orig_{batch_start}"

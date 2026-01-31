@@ -3,7 +3,6 @@ from pptx import Presentation
 from pptx.shapes.group import GroupShape
 from pptx.enum.text import MSO_AUTO_SIZE
 from pptx.util import Pt
-from pptx.oxml.ns import qn
 from typing import Generator
 
 logger = structlog.get_logger(__name__)
@@ -13,16 +12,18 @@ def _reset_character_spacing(run):
     """
     Reset character spacing to normal (0) for a run.
     Korean text often uses condensed spacing which doesn't work well with Latin characters.
+    The 'spc' attribute is in hundredths of a point (e.g., -800 = -8pt condensed).
     """
     try:
-        # Access the underlying XML element
+        # Access the underlying XML element for run properties
         rPr = run._r.get_or_add_rPr()
-        # Remove the 'spc' (spacing) attribute if it exists
-        # spc is in hundredths of a point, negative = condensed, positive = expanded
-        if rPr.get(qn('a:spc')) is not None:
-            del rPr.attrib[qn('a:spc')]
-        # Also set it explicitly to 0 for safety
-        rPr.set(qn('a:spc'), '0')
+        # The 'spc' attribute is directly on rPr without namespace prefix
+        # Remove existing spc attribute if present
+        if 'spc' in rPr.attrib:
+            del rPr.attrib['spc']
+        # Set to 0 (normal spacing) - no namespace prefix needed
+        rPr.set('spc', '0')
+        logger.debug("character_spacing_reset", text_preview=run.text[:20] if run.text else "")
     except Exception as e:
         logger.debug("reset_spacing_failed", error=str(e))
 

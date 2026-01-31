@@ -863,3 +863,66 @@ footer {
 .checkbox-label span {
     user-select: none;
 }
+
+/* Result files list */
+.result-files {
+    width: 100%;
+    margin: 1rem 0;
+}
+
+.result-file-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.result-file-item.completed {
+    border-left: 3px solid var(--success-color);
+}
+
+.result-file-item.error {
+    border-left: 3px solid var(--error-color);
+}
+
+.result-file-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.result-file-name {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.result-file-stats {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.result-file-error {
+    font-size: 0.85rem;
+    color: var(--error-color);
+}
+
+.btn-download-file {
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+}
+
+.download-all-container {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color);
+    text-align: center;
+}
+
+.btn-download-all {
+    width: 100%;
+    padding: 0.75rem;
+}
