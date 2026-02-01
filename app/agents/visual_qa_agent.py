@@ -143,9 +143,12 @@ class VisualQAAgent:
                 str(pdf_path), str(output_dir / "slide")
             ], check=True, capture_output=True, timeout=120)
 
-            # Collect generated images
-            images = sorted(output_dir.glob("slide-*.png"))
-            logger.debug("pdf_batch_converted", first=first_page, last=last_page, count=len(images))
+            # Collect generated images - sort numerically, not by string
+            images = list(output_dir.glob("slide-*.png"))
+            # Sort by numeric page number extracted from filename (slide-N.png)
+            images.sort(key=lambda p: int(p.stem.split('-')[-1]))
+            logger.info("pdf_batch_converted", first=first_page, last=last_page, count=len(images),
+                       files=[p.name for p in images])
             return images
         except Exception as e:
             logger.error("pdf_batch_conversion_failed", error=str(e))
@@ -594,6 +597,16 @@ Return as JSON:
                 format_adjustments=all_format_adjustments,
             )
 
+            # Log each format adjustment for debugging
+            for adj in all_format_adjustments:
+                logger.info(
+                    "format_adjustment_in_report",
+                    slide=adj.slide_number,
+                    text=adj.text[:50] if adj.text else "",
+                    type=adj.adjustment_type,
+                    target=adj.target_value,
+                )
+
             logger.info(
                 "visual_qa_complete",
                 iteration=iteration,
@@ -601,7 +614,7 @@ Return as JSON:
                 overall_score=overall_score,
                 critical_issues=len(critical_issues),
                 suggestions=len(unique_suggestions),
-                format_adjustments=len(all_format_adjustments),
+                format_adjustments_count=len(all_format_adjustments),
             )
 
             return report
