@@ -597,17 +597,22 @@ Return as JSON:
                 format_adjustments=all_format_adjustments,
             )
 
-            # Log each format adjustment for debugging
-            for adj in all_format_adjustments:
-                logger.info(
-                    "format_adjustment_in_report",
-                    slide=adj.slide_number,
-                    text=adj.text[:50] if adj.text else "",
-                    type=adj.adjustment_type,
-                    target=adj.target_value,
+            # Log each format adjustment for debugging (WARNING level to ensure visibility)
+            if all_format_adjustments:
+                logger.warning(
+                    "format_adjustments_generated",
+                    iteration=iteration,
+                    count=len(all_format_adjustments),
+                    adjustments=[{"slide": a.slide_number, "type": a.adjustment_type, "text": a.text[:30]} for a in all_format_adjustments[:5]],
+                )
+            else:
+                logger.warning(
+                    "no_format_adjustments_generated",
+                    iteration=iteration,
+                    total_slides=processed_slides,
                 )
 
-            logger.info(
+            logger.warning(
                 "visual_qa_complete",
                 iteration=iteration,
                 total_slides=processed_slides,
