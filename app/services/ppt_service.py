@@ -36,20 +36,21 @@ def _reduce_margins(text_frame):
     Instead, we manually reduce font sizes.
 
     IMPORTANT: Preserves original vertical anchor (alignment).
+    Only reduces left/right margins to avoid vertical position changes.
     """
     try:
         # Preserve original vertical anchor before changing margins
         original_anchor = text_frame.anchor
 
-        # Reduce margins to give more space for text
+        # Only reduce LEFT and RIGHT margins to give horizontal space
+        # Do NOT change top/bottom margins as this can affect vertical positioning
         # Margins are in EMUs (914400 EMUs = 1 inch)
-        # Setting to ~0.03 inch margins (minimal)
         text_frame.margin_left = 27432   # ~0.03 inch
         text_frame.margin_right = 27432
-        text_frame.margin_top = 27432
-        text_frame.margin_bottom = 27432
+        # Keep original top/bottom margins to preserve vertical position
 
-        # Restore vertical anchor (middle, top, bottom alignment)
+        # Explicitly restore vertical anchor (even if it was None, try to preserve)
+        # This is critical for maintaining vertical alignment
         if original_anchor is not None:
             text_frame.anchor = original_anchor
 
