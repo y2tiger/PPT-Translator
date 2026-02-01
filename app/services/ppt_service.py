@@ -112,13 +112,34 @@ class PPTService:
 
     def _extract_from_shape(self, shape, slide_idx: int, depth: int = 0) -> Generator[dict, None, None]:
         """Extract text from a single shape at paragraph level for better context."""
+        shape_type = str(getattr(shape, 'shape_type', 'unknown'))
+        shape_id = getattr(shape, 'shape_id', 'unknown')
+        shape_name = getattr(shape, 'name', '')
+
+        # Log all shapes for debugging (helps identify missing texts)
+        has_text = hasattr(shape, 'has_text_frame') and shape.has_text_frame
+        has_table = hasattr(shape, 'has_table') and shape.has_table
+        is_group = isinstance(shape, GroupShape)
+
+        logger.debug(
+            "shape_found",
+            slide=slide_idx,
+            shape_id=shape_id,
+            shape_type=shape_type,
+            shape_name=shape_name,
+            has_text_frame=has_text,
+            has_table=has_table,
+            is_group=is_group,
+            depth=depth,
+        )
+
         # Handle group shapes recursively (up to depth 10 to prevent infinite loops)
         if isinstance(shape, GroupShape) and depth < 10:
             try:
                 for child_shape in shape.shapes:
                     yield from self._extract_from_shape(child_shape, slide_idx, depth + 1)
             except Exception as e:
-                logger.debug("group_extraction_error", error=str(e), shape_id=getattr(shape, 'shape_id', 'unknown'))
+                logger.debug("group_extraction_error", error=str(e), shape_id=shape_id)
             # Don't return here - group shapes might also have text frames
 
         # Handle text frames - extract at PARAGRAPH level (not run level)
@@ -191,17 +212,26 @@ class PPTService:
             # Avoid duplicates within the same slide
             if text not in texts_by_slide[slide_num]:
                 texts_by_slide[slide_num].append(text)
-                # Debug: log each extracted text
-                logger.debug(
+                # INFO level log for production visibility - see all extracted texts
+                logger.info(
                     "text_extracted",
                     slide=slide_num,
                     shape_id=item.get("shape_id"),
-                    text_preview=text[:50] if len(text) > 50 else text,
+                    shape_type=item.get("shape_type"),
+                    text=text,  # Full text for debugging
                     is_table=item.get("is_table", False),
                 )
 
-        # Log summary
+        # Log summary with all texts per slide
         total_texts = sum(len(texts) for texts in texts_by_slide.values())
+        for slide_num, texts in sorted(texts_by_slide.items()):
+            logger.info(
+                "slide_texts_summary",
+                slide=slide_num,
+                text_count=len(texts),
+                texts=texts,  # Show all texts for this slide
+            )
+
         logger.info(
             "extraction_complete",
             total_slides=len(texts_by_slide),
