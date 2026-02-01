@@ -560,7 +560,7 @@ async def process_translation(
                 # Visual comparison
                 translation_status[file_id] = TranslationStatus(
                     status="processing",
-                    progress=70 + (visual_iteration * 5) + 2,
+                    progress=70 + ((visual_iteration - 1) * 25 // max_iterations),
                     total_slides=total_slides,
                     current_slide=total_slides,
                     review_loop=visual_iteration,
@@ -568,14 +568,25 @@ async def process_translation(
                 )
 
                 # Progress callback for Visual QA batch processing
-                def visual_qa_progress(batch_num, total_batches, slide_num, total_qa_slides):
+                # Visual QA uses 70-95% of progress bar (25% total, divided by iterations)
+                iteration_progress_range = 25 // max_iterations  # e.g., 25 for 1 iteration, 8 for 3 iterations
+                iteration_base_progress = 70 + ((visual_iteration - 1) * iteration_progress_range)
+
+                def visual_qa_progress(
+                    batch_num, total_batches, slide_num, total_qa_slides,
+                    _base=iteration_base_progress, _range=iteration_progress_range,
+                    _iter=visual_iteration, _max_iter=max_iterations
+                ):
+                    # Calculate progress within this iteration based on batch completion
+                    batch_progress = (batch_num / total_batches) * _range
+                    current_progress = int(_base + batch_progress)
                     translation_status[file_id] = TranslationStatus(
                         status="processing",
-                        progress=70 + (visual_iteration * 5) + 2,
+                        progress=min(95, current_progress),  # Cap at 95% until final step
                         total_slides=total_slides,
                         current_slide=total_slides,
-                        review_loop=visual_iteration,
-                        message=f"시각적 품질 검증 {visual_iteration}/{max_iterations}회차: 배치 {batch_num}/{total_batches} (슬라이드 {slide_num}-{min(slide_num+2, total_qa_slides)}/{total_qa_slides})",
+                        review_loop=_iter,
+                        message=f"시각적 품질 검증 {_iter}/{_max_iter}회차: 배치 {batch_num}/{total_batches} (슬라이드 {slide_num}-{min(slide_num+2, total_qa_slides)}/{total_qa_slides})",
                     )
 
                 try:
@@ -757,15 +768,25 @@ async def process_translation(
                         )
 
                         # Convert FormatAdjustment objects to dicts for apply_adjustments
-                        adjustments_to_apply = [
-                            {
+                        # IMPORTANT: Use translated text (not original) to find text in PPT
+                        adjustments_to_apply = []
+                        for adj in visual_report.format_adjustments:
+                            # Look up the translated text from the original
+                            translated_text = all_translations.get(adj.text, adj.text)
+                            adjustments_to_apply.append({
                                 "slide_number": adj.slide_number,
-                                "text": adj.text,
+                                "text": translated_text,  # Use translated text to find in PPT
+                                "original_text": adj.text,  # Keep original for logging
                                 "adjustment_type": adj.adjustment_type,
                                 "target_value": adj.target_value,
-                            }
-                            for adj in visual_report.format_adjustments
-                        ]
+                            })
+                            logger.info(
+                                "format_adjustment_mapped",
+                                original=adj.text[:30],
+                                translated=translated_text[:30],
+                                type=adj.adjustment_type,
+                                target=adj.target_value,
+                            )
 
                         # Apply adjustments to the translated PPT
                         _, applied_count = ppt_service.apply_adjustments(

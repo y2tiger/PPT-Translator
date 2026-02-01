@@ -36,20 +36,21 @@ def _reduce_margins(text_frame):
     Instead, we manually reduce font sizes.
 
     IMPORTANT: Preserves original vertical anchor (alignment).
+    Only reduces left/right margins to avoid vertical position changes.
     """
     try:
         # Preserve original vertical anchor before changing margins
         original_anchor = text_frame.anchor
 
-        # Reduce margins to give more space for text
+        # Only reduce LEFT and RIGHT margins to give horizontal space
+        # Do NOT change top/bottom margins as this can affect vertical positioning
         # Margins are in EMUs (914400 EMUs = 1 inch)
-        # Setting to ~0.03 inch margins (minimal)
         text_frame.margin_left = 27432   # ~0.03 inch
         text_frame.margin_right = 27432
-        text_frame.margin_top = 27432
-        text_frame.margin_bottom = 27432
+        # Keep original top/bottom margins to preserve vertical position
 
-        # Restore vertical anchor (middle, top, bottom alignment)
+        # Explicitly restore vertical anchor (even if it was None, try to preserve)
+        # This is critical for maintaining vertical alignment
         if original_anchor is not None:
             text_frame.anchor = original_anchor
 
@@ -322,36 +323,35 @@ class PPTService:
         if width_ratio > 1.0 or force_reduction:
             # Use width_ratio for calculation, but for force_reduction cases
             # where width_ratio <= 1.0, use a minimum effective ratio
-            effective_width_ratio = max(width_ratio, 1.2) if force_reduction else width_ratio
+            effective_width_ratio = max(width_ratio, 1.1) if force_reduction else width_ratio
 
-            # VERY aggressive formula - use power of 0.85 for direct proportion
-            # For width_ratio 1.5: ~0.70 (70%)
-            # For width_ratio 2.0: ~0.55 (55%)
-            # For width_ratio 2.5: ~0.46 (46%)
-            # For width_ratio 3.0: ~0.39 (39%)
-            size_ratio = 1.0 / (effective_width_ratio ** 0.85)
+            # MODERATE formula - use power of 0.7 for gentler reduction
+            # For width_ratio 1.5: ~0.74 (74%)
+            # For width_ratio 2.0: ~0.62 (62%)
+            # For width_ratio 2.5: ~0.53 (53%)
+            # For width_ratio 3.0: ~0.47 (47%)
+            size_ratio = 1.0 / (effective_width_ratio ** 0.7)
 
             # For short original text (diagram labels in small boxes)
-            # These need EXTREME reduction as the boxes are tiny
-            # With word_wrap disabled, text must fit on one line
+            # These need more reduction as the boxes are small
             if len(original) <= 5:
-                # Extremely aggressive for very short labels (like LENS, BEZEL)
-                size_ratio = 1.0 / (effective_width_ratio ** 0.95)
-                size_ratio = max(0.25, size_ratio)  # Allow down to 25%
-                # For forced reduction on very short text, be even more aggressive
-                if force_reduction and size_ratio > 0.6:
-                    size_ratio = 0.55  # Force at least 45% reduction
+                # More aggressive for very short labels
+                size_ratio = 1.0 / (effective_width_ratio ** 0.8)
+                size_ratio = max(0.40, size_ratio)  # Allow down to 40% (not 25%)
+                # For forced reduction on very short text
+                if force_reduction and size_ratio > 0.7:
+                    size_ratio = 0.65  # Force at least 35% reduction (not 45%)
                 logger.info("ratio_short_text", orig_len=len(original), final_ratio=round(size_ratio, 3), category="<=5", forced=force_reduction)
             elif len(original) <= 10:
-                # Very aggressive for short labels
-                size_ratio = 1.0 / (effective_width_ratio ** 0.90)
-                size_ratio = max(0.30, size_ratio)  # Allow down to 30%
-                if force_reduction and size_ratio > 0.65:
-                    size_ratio = 0.60  # Force at least 40% reduction
+                # Moderate reduction for short labels
+                size_ratio = 1.0 / (effective_width_ratio ** 0.75)
+                size_ratio = max(0.45, size_ratio)  # Allow down to 45% (not 30%)
+                if force_reduction and size_ratio > 0.75:
+                    size_ratio = 0.70  # Force at least 30% reduction (not 40%)
                 logger.info("ratio_short_text", orig_len=len(original), final_ratio=round(size_ratio, 3), category="<=10", forced=force_reduction)
             else:
-                # Normal text
-                size_ratio = max(0.40, size_ratio)  # Allow down to 40%
+                # Normal text - gentler reduction
+                size_ratio = max(0.50, size_ratio)  # Allow down to 50% (not 40%)
                 logger.info("ratio_normal_text", orig_len=len(original), final_ratio=round(size_ratio, 3), category=">10")
 
             return size_ratio
