@@ -458,16 +458,22 @@ class PPTService:
 
     def _normalize_font_sizes(self, requirements: list[dict]) -> dict[str, float]:
         """
-        Pass 2: Group texts by original font size and normalize to group minimum.
+        Pass 2: Group texts by SLIDE and original font size, normalize to group minimum.
         Returns a dict mapping para_text to normalized font size.
+
+        Grouping is done per-slide to avoid unnecessary font reduction across slides.
+        For example, a long translation on slide 1 shouldn't affect font sizes on slide 10.
         """
-        # Group by original font size (rounded to nearest integer for grouping)
-        # This ensures texts that were originally the same size stay the same size
-        groups: dict[int, list[dict]] = {}
+        # Group by (slide_idx, original_pt) - per-slide grouping
+        # This ensures texts are only normalized within the same slide
+        groups: dict[tuple[int, int], list[dict]] = {}
 
         for req in requirements:
-            # Round to nearest pt for grouping (e.g., 13.5pt and 14pt -> same group as 14pt)
-            group_key = round(req["original_pt"])
+            # Group by slide AND font size
+            slide_idx = req["slide_idx"]
+            original_pt_rounded = round(req["original_pt"])
+            group_key = (slide_idx, original_pt_rounded)
+
             if group_key not in groups:
                 groups[group_key] = []
             groups[group_key].append(req)
@@ -476,15 +482,17 @@ class PPTService:
         normalized: dict[str, float] = {}
 
         for group_key, group_items in groups.items():
+            slide_idx, original_pt = group_key
             # Find minimum calculated_pt in this group
             min_calculated_pt = min(item["calculated_pt"] for item in group_items)
 
             logger.info(
                 "font_size_group_normalized",
-                original_pt=group_key,
+                slide=slide_idx,
+                original_pt=original_pt,
                 item_count=len(group_items),
                 min_calculated_pt=round(min_calculated_pt, 1),
-                texts=[item["para_text"][:20] for item in group_items[:5]],  # Show first 5
+                texts=[item["para_text"][:20] for item in group_items[:3]],  # Show first 3
             )
 
             # Apply minimum to all items in group
