@@ -688,29 +688,6 @@ async def process_translation(
                             texts=visual_report.texts_with_formatting_issues[:5],  # Log first 5
                         )
 
-                    # Check if quality is good enough AND no formatting issues AND this is NOT the first iteration
-                    # Always run at least one full iteration to apply any improvements
-                    if (visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD
-                        and not has_formatting_issues
-                        and visual_iteration > 1):
-                        logger.debug(
-                            "visual_qa_passed",
-                            file_id=file_id,
-                            iteration=visual_iteration,
-                            score=visual_report.overall_score,
-                        )
-                        break
-
-                    # If score is good but has formatting issues, log and continue to apply fixes
-                    if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD and has_formatting_issues:
-                        logger.debug(
-                            "visual_qa_continuing_for_formatting",
-                            file_id=file_id,
-                            iteration=visual_iteration,
-                            score=visual_report.overall_score,
-                            formatting_issues=formatting_issues_count,
-                        )
-
                     # Get retranslations for problematic texts
                     has_work_to_do = False
 
