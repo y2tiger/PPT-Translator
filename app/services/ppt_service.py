@@ -106,6 +106,9 @@ class PPTService:
     def __init__(self, file_path: str):
         self.file_path = file_path
         self.presentation = Presentation(file_path)
+        # Stores normalized font sizes after 2-pass calculation
+        # Key: (slide_idx, shape_id, para_text) -> normalized_pt
+        self._normalized_font_sizes: dict[tuple, float] = {}
 
     def _extract_from_shape(self, shape, slide_idx: int, depth: int = 0) -> Generator[dict, None, None]:
         """Extract text from a single shape at paragraph level for better context."""
@@ -315,15 +318,165 @@ class PPTService:
         logger.info("ratio_no_reduction", width_ratio=round(width_ratio, 3), reason="width_ratio_lte_1")
         return 1.0
 
+    def _collect_font_requirements_from_shape(
+        self,
+        shape,
+        slide_idx: int,
+        translations: dict[str, str],
+        requirements: list[dict],
+        depth: int = 0
+    ):
+        """
+        Pass 1: Collect font size requirements for all texts in a shape.
+        Does NOT apply translations, just calculates what sizes would be needed.
+        """
+        shape_id = getattr(shape, 'shape_id', 'unknown')
+
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape) and depth < 10:
+            try:
+                for child_shape in shape.shapes:
+                    self._collect_font_requirements_from_shape(
+                        child_shape, slide_idx, translations, requirements, depth + 1
+                    )
+            except Exception as e:
+                logger.debug("group_collect_error", error=str(e))
+
+        # Handle text frames
+        if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
+            for para_idx, paragraph in enumerate(shape.text_frame.paragraphs):
+                para_text = paragraph.text.strip()
+                if para_text in translations:
+                    translated = translations[para_text]
+                    size_ratio = self._calculate_font_size_ratio(para_text, translated)
+
+                    # Get original font size
+                    original_pt = None
+                    if paragraph.runs:
+                        original_size = _get_effective_font_size(paragraph.runs[0], paragraph)
+                        if original_size:
+                            original_pt = original_size / 12700
+
+                    # Calculate what the new size would be
+                    if original_pt and size_ratio < 1.0:
+                        calculated_pt = original_pt * size_ratio
+                        min_pt = 5.0 if len(translated) <= 15 else 6.0
+                        calculated_pt = max(min_pt, calculated_pt)
+                    elif original_pt:
+                        calculated_pt = original_pt
+                    else:
+                        # Default based on text length
+                        if len(translated) <= 8:
+                            calculated_pt = 6.0
+                        elif len(translated) <= 12:
+                            calculated_pt = 7.0
+                        elif len(translated) <= 20:
+                            calculated_pt = 8.0
+                        else:
+                            calculated_pt = 9.0
+                        original_pt = calculated_pt  # Treat default as original
+
+                    requirements.append({
+                        "slide_idx": slide_idx,
+                        "shape_id": shape_id,
+                        "para_idx": para_idx,
+                        "para_text": para_text,
+                        "translated": translated,
+                        "original_pt": original_pt,
+                        "calculated_pt": calculated_pt,
+                        "size_ratio": size_ratio,
+                    })
+
+        # Handle tables
+        if hasattr(shape, 'has_table') and shape.has_table:
+            try:
+                for row_idx, row in enumerate(shape.table.rows):
+                    for col_idx, cell in enumerate(row.cells):
+                        for para_idx, para in enumerate(cell.text_frame.paragraphs):
+                            para_text = para.text.strip()
+                            if para_text in translations:
+                                translated = translations[para_text]
+                                size_ratio = self._calculate_font_size_ratio(para_text, translated)
+
+                                original_pt = None
+                                if para.runs:
+                                    original_size = _get_effective_font_size(para.runs[0], para)
+                                    if original_size:
+                                        original_pt = original_size / 12700
+
+                                if original_pt and size_ratio < 1.0:
+                                    calculated_pt = max(6.0, original_pt * size_ratio)
+                                elif original_pt:
+                                    calculated_pt = original_pt
+                                else:
+                                    calculated_pt = 8.0 if len(translated) <= 15 else 9.0
+                                    original_pt = calculated_pt
+
+                                requirements.append({
+                                    "slide_idx": slide_idx,
+                                    "shape_id": f"{shape_id}_table_{row_idx}_{col_idx}",
+                                    "para_idx": para_idx,
+                                    "para_text": para_text,
+                                    "translated": translated,
+                                    "original_pt": original_pt,
+                                    "calculated_pt": calculated_pt,
+                                    "size_ratio": size_ratio,
+                                    "is_table": True,
+                                })
+            except Exception as e:
+                logger.debug("table_collect_error", error=str(e))
+
+    def _normalize_font_sizes(self, requirements: list[dict]) -> dict[str, float]:
+        """
+        Pass 2: Group texts by original font size and normalize to group minimum.
+        Returns a dict mapping para_text to normalized font size.
+        """
+        # Group by original font size (rounded to nearest integer for grouping)
+        # This ensures texts that were originally the same size stay the same size
+        groups: dict[int, list[dict]] = {}
+
+        for req in requirements:
+            # Round to nearest pt for grouping (e.g., 13.5pt and 14pt -> same group as 14pt)
+            group_key = round(req["original_pt"])
+            if group_key not in groups:
+                groups[group_key] = []
+            groups[group_key].append(req)
+
+        # For each group, find the minimum calculated_pt
+        normalized: dict[str, float] = {}
+
+        for group_key, group_items in groups.items():
+            # Find minimum calculated_pt in this group
+            min_calculated_pt = min(item["calculated_pt"] for item in group_items)
+
+            logger.info(
+                "font_size_group_normalized",
+                original_pt=group_key,
+                item_count=len(group_items),
+                min_calculated_pt=round(min_calculated_pt, 1),
+                texts=[item["para_text"][:20] for item in group_items[:5]],  # Show first 5
+            )
+
+            # Apply minimum to all items in group
+            for item in group_items:
+                normalized[item["para_text"]] = min_calculated_pt
+
+        return normalized
+
     def _apply_to_shape(
         self,
         shape,
         translations: dict[str, str],
         applied_tracker: dict[str, bool],
+        normalized_sizes: dict[str, float],
         target_font: str = "Arial",
         depth: int = 0
     ):
-        """Apply translations to a single shape at paragraph level."""
+        """Apply translations to a single shape at paragraph level.
+
+        Uses normalized_sizes dict to ensure consistent font sizes across
+        texts that originally had the same size.
+        """
         shape_type = str(getattr(shape, 'shape_type', 'unknown'))
         shape_id = getattr(shape, 'shape_id', 'unknown')
 
@@ -331,7 +484,7 @@ class PPTService:
         if isinstance(shape, GroupShape) and depth < 10:
             try:
                 for child_shape in shape.shapes:
-                    self._apply_to_shape(child_shape, translations, applied_tracker, target_font, depth + 1)
+                    self._apply_to_shape(child_shape, translations, applied_tracker, normalized_sizes, target_font, depth + 1)
             except Exception as e:
                 logger.debug("group_apply_error", error=str(e))
             # Don't return - continue to check for text frames
@@ -374,8 +527,9 @@ class PPTService:
                 para_text = paragraph.text.strip()
                 if para_text in translations:
                     translated = translations[para_text]
-                    # Calculate font size reduction ratio
-                    size_ratio = self._calculate_font_size_ratio(para_text, translated)
+
+                    # Use pre-calculated normalized font size if available
+                    normalized_pt = normalized_sizes.get(para_text)
 
                     # INFO level log for production visibility
                     logger.info(
@@ -384,7 +538,7 @@ class PPTService:
                         shape_type=shape_type,
                         original=para_text[:40],
                         translated=translated[:40],
-                        size_ratio=round(size_ratio, 3),
+                        normalized_pt=round(normalized_pt, 1) if normalized_pt else None,
                         has_runs=len(paragraph.runs) > 0,
                         run_count=len(paragraph.runs),
                     )
@@ -398,55 +552,27 @@ class PPTService:
                         # Reset character spacing to normal (Korean often has condensed spacing)
                         _reset_character_spacing(first_run)
 
-                        # Reduce font size if needed
-                        if size_ratio < 1.0:
-                            # Get effective font size (handles inherited/theme fonts)
+                        # Apply normalized font size (from 2-pass calculation)
+                        if normalized_pt:
                             original_size = _get_effective_font_size(first_run, paragraph)
+                            original_pt = original_size / 12700 if original_size else None
 
-                            if original_size:
-                                # original_size is in EMUs, convert to points
-                                original_pt = original_size / 12700
-                                new_pt = original_pt * size_ratio
-                                # Minimum readable size: 5pt for short labels, 6pt otherwise
-                                # Short labels are on single line (word_wrap disabled) so can be smaller
-                                min_pt = 5.0 if len(translated) <= 15 else 6.0
-                                new_pt = max(min_pt, new_pt)
-                                _apply_font_size(first_run, new_pt)
+                            # Only reduce font size, never increase
+                            if original_pt is None or normalized_pt < original_pt:
+                                _apply_font_size(first_run, normalized_pt)
                                 logger.info(
-                                    "font_reduced",
+                                    "font_normalized",
                                     text=translated[:20],
-                                    original_pt=round(original_pt, 1),
-                                    new_pt=round(new_pt, 1),
-                                    ratio=round(size_ratio, 2),
+                                    original_pt=round(original_pt, 1) if original_pt else None,
+                                    normalized_pt=round(normalized_pt, 1),
                                 )
                             else:
-                                # Font size not found - apply a reasonable default based on text length
-                                # For short labels in small boxes, use smaller fonts
-                                # These are likely diagram labels where text must fit on one line
-                                if len(translated) <= 8:
-                                    default_pt = 6.0  # Very small for tight boxes
-                                elif len(translated) <= 12:
-                                    default_pt = 7.0
-                                elif len(translated) <= 20:
-                                    default_pt = 8.0
-                                else:
-                                    default_pt = 9.0
-                                _apply_font_size(first_run, default_pt)
                                 logger.info(
-                                    "font_default_applied",
+                                    "font_kept_original",
                                     text=translated[:20],
-                                    default_pt=default_pt,
-                                    trans_len=len(translated),
-                                    reason="no_original_size_found",
+                                    original_pt=round(original_pt, 1) if original_pt else None,
+                                    normalized_pt=round(normalized_pt, 1),
                                 )
-                        else:
-                            # size_ratio >= 1.0, no reduction needed
-                            logger.info(
-                                "font_no_reduction",
-                                text=translated[:20],
-                                size_ratio=round(size_ratio, 3),
-                                reason="ratio_gte_1",
-                            )
 
                         # Clear remaining runs
                         for run in paragraph.runs[1:]:
@@ -469,18 +595,10 @@ class PPTService:
                             run = paragraph.add_run()
                             run.text = translated
                             run.font.name = target_font
-                            if size_ratio < 1.0:
-                                # Apply a default small font for short labels
-                                if len(translated) <= 8:
-                                    _apply_font_size(run, 6.0)
-                                elif len(translated) <= 12:
-                                    _apply_font_size(run, 7.0)
-                                elif len(translated) <= 20:
-                                    _apply_font_size(run, 8.0)
-                                else:
-                                    _apply_font_size(run, 9.0)
+                            if normalized_pt:
+                                _apply_font_size(run, normalized_pt)
                             applied_tracker[para_text] = True
-                            logger.info("run_added_successfully", text=translated[:20])
+                            logger.info("run_added_successfully", text=translated[:20], normalized_pt=normalized_pt)
                         except Exception as e:
                             logger.error("add_run_failed", error=str(e))
                             applied_tracker[para_text] = False
@@ -505,7 +623,7 @@ class PPTService:
                             para_text = para.text.strip()
                             if para_text in translations:
                                 translated = translations[para_text]
-                                size_ratio = self._calculate_font_size_ratio(para_text, translated)
+                                normalized_pt = normalized_sizes.get(para_text)
 
                                 if para.runs:
                                     first_run = para.runs[0]
@@ -515,17 +633,12 @@ class PPTService:
                                     # Reset character spacing to normal
                                     _reset_character_spacing(first_run)
 
-                                    # Reduce font size if needed
-                                    if size_ratio < 1.0:
+                                    # Apply normalized font size
+                                    if normalized_pt:
                                         original_size = _get_effective_font_size(first_run, para)
-                                        if original_size:
-                                            original_pt = original_size / 12700
-                                            new_pt = max(6.0, original_pt * size_ratio)
-                                            _apply_font_size(first_run, new_pt)
-                                        else:
-                                            # Default for table cells
-                                            default_pt = 8.0 if len(translated) <= 15 else 9.0
-                                            _apply_font_size(first_run, default_pt)
+                                        original_pt = original_size / 12700 if original_size else None
+                                        if original_pt is None or normalized_pt < original_pt:
+                                            _apply_font_size(first_run, normalized_pt)
 
                                     for run in para.runs[1:]:
                                         run.text = ""
@@ -541,7 +654,13 @@ class PPTService:
         output_path: str
     ) -> tuple[str, dict[str, bool]]:
         """
-        Apply translations to the presentation.
+        Apply translations to the presentation using 2-pass font normalization.
+
+        Pass 1: Collect font size requirements for all texts
+        Pass 2: Group by original size, normalize to group minimum, apply
+
+        This ensures texts that originally had the same font size will have
+        the same font size after translation (consistent visual appearance).
 
         Args:
             translations: Dict mapping original text to translated text
@@ -552,9 +671,26 @@ class PPTService:
         """
         applied_tracker: dict[str, bool] = {}
 
+        # === PASS 1: Collect font size requirements ===
+        logger.info("font_normalization_pass1_start", translation_count=len(translations))
+        requirements: list[dict] = []
+
+        for slide_idx, slide in enumerate(self.presentation.slides, 1):
+            for shape in slide.shapes:
+                self._collect_font_requirements_from_shape(
+                    shape, slide_idx, translations, requirements
+                )
+
+        logger.info("font_normalization_pass1_complete", requirements_count=len(requirements))
+
+        # === PASS 2: Normalize font sizes by original size group ===
+        normalized_sizes = self._normalize_font_sizes(requirements)
+        logger.info("font_normalization_pass2_complete", normalized_count=len(normalized_sizes))
+
+        # === PASS 3: Apply translations with normalized font sizes ===
         for slide in self.presentation.slides:
             for shape in slide.shapes:
-                self._apply_to_shape(shape, translations, applied_tracker)
+                self._apply_to_shape(shape, translations, applied_tracker, normalized_sizes)
 
         self.presentation.save(output_path)
 
