@@ -456,46 +456,31 @@ class PPTService:
 
     def _normalize_font_sizes(self, requirements: list[dict]) -> dict[str, float]:
         """
-        Pass 2: Group texts by SLIDE and original font size, normalize to group minimum.
-        Returns a dict mapping para_text to normalized font size.
+        Pass 2: Calculate individual font sizes for each text.
+        Returns a dict mapping para_text to calculated font size.
 
-        Grouping is done per-slide to avoid unnecessary font reduction across slides.
-        For example, a long translation on slide 1 shouldn't affect font sizes on slide 10.
+        Each text is adjusted individually based on its own content length
+        and translation expansion. No grouping is applied.
         """
-        # Group by (slide_idx, original_pt) - per-slide grouping
-        # This ensures texts are only normalized within the same slide
-        groups: dict[tuple[int, int], list[dict]] = {}
-
-        for req in requirements:
-            # Group by slide AND font size
-            slide_idx = req["slide_idx"]
-            original_pt_rounded = round(req["original_pt"])
-            group_key = (slide_idx, original_pt_rounded)
-
-            if group_key not in groups:
-                groups[group_key] = []
-            groups[group_key].append(req)
-
-        # For each group, find the minimum calculated_pt
         normalized: dict[str, float] = {}
 
-        for group_key, group_items in groups.items():
-            slide_idx, original_pt = group_key
-            # Find minimum calculated_pt in this group
-            min_calculated_pt = min(item["calculated_pt"] for item in group_items)
+        for req in requirements:
+            para_text = req["para_text"]
+            calculated_pt = req["calculated_pt"]
+            original_pt = req["original_pt"]
+            size_ratio = req["size_ratio"]
+
+            normalized[para_text] = calculated_pt
 
             logger.info(
-                "font_size_group_normalized",
-                slide=slide_idx,
-                original_pt=original_pt,
-                item_count=len(group_items),
-                min_calculated_pt=round(min_calculated_pt, 1),
-                texts=[item["para_text"][:20] for item in group_items[:3]],  # Show first 3
+                "font_size_calculated",
+                slide=req["slide_idx"],
+                original_pt=round(original_pt, 1),
+                calculated_pt=round(calculated_pt, 1),
+                size_ratio=round(size_ratio, 2),
+                text=para_text[:30],
+                translated=req["translated"][:30],
             )
-
-            # Apply minimum to all items in group
-            for item in group_items:
-                normalized[item["para_text"]] = min_calculated_pt
 
         return normalized
 
@@ -699,13 +684,13 @@ class PPTService:
         output_path: str
     ) -> tuple[str, dict[str, bool]]:
         """
-        Apply translations to the presentation using 2-pass font normalization.
+        Apply translations to the presentation using 2-pass font sizing.
 
         Pass 1: Collect font size requirements for all texts
-        Pass 2: Group by original size, normalize to group minimum, apply
+        Pass 2: Calculate individual font sizes based on content length
 
-        This ensures texts that originally had the same font size will have
-        the same font size after translation (consistent visual appearance).
+        Each text is adjusted individually based on its own translation length,
+        preserving original font sizes where no reduction is needed.
 
         Args:
             translations: Dict mapping original text to translated text
