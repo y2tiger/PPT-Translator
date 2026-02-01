@@ -465,48 +465,61 @@ class PPTService:
             except Exception as e:
                 logger.debug("table_collect_error", error=str(e))
 
-    def _normalize_font_sizes(self, requirements: list[dict]) -> dict[str, float]:
+    def _normalize_font_sizes(self, requirements: list[dict]) -> dict[tuple[int, str], float]:
         """
         Pass 2: Group texts by SLIDE and original font size, normalize to group minimum.
-        Returns a dict mapping para_text to normalized font size.
+        Returns a dict mapping (slide_idx, para_text) to normalized font size.
+
+        IMPORTANT: Key includes slide_idx to ensure each slide is processed independently.
+        Same text on different slides will have independent font size calculations.
 
         Grouping is done per-slide to maintain visual consistency within each slide.
         All texts with the same original font size on a slide will get the same
         calculated size (the minimum needed to fit the longest translation).
 
-        Visual QA can later detect and fix individual sizing issues if needed.
+        Uses ±2pt tolerance for grouping to handle minor font size variations
+        (e.g., 18.4pt and 18.6pt are grouped together as they appear visually same).
         """
-        # Group by (slide_idx, original_pt) - per-slide grouping
+        # Group by (slide_idx, original_pt_bucket) - per-slide grouping with tolerance
+        # Use 2pt buckets: 0-2, 2-4, 4-6, etc. to group similar sizes
         groups: dict[tuple[int, int], list[dict]] = {}
 
         for req in requirements:
             slide_idx = req["slide_idx"]
-            original_pt_rounded = round(req["original_pt"])
-            group_key = (slide_idx, original_pt_rounded)
+            # Use 2pt bucket instead of rounding to nearest integer
+            # This groups 18.4pt and 18.6pt together (both in bucket 9 = 18//2)
+            # Bucket 9 covers 18.0-19.99pt
+            original_pt_bucket = int(req["original_pt"] // 2)
+            group_key = (slide_idx, original_pt_bucket)
 
             if group_key not in groups:
                 groups[group_key] = []
             groups[group_key].append(req)
 
         # For each group, find the minimum calculated_pt
-        normalized: dict[str, float] = {}
+        # Key is (slide_idx, para_text) to ensure slides are independent
+        normalized: dict[tuple[int, str], float] = {}
 
         for group_key, group_items in groups.items():
-            slide_idx, original_pt = group_key
+            slide_idx, original_pt_bucket = group_key
             min_calculated_pt = min(item["calculated_pt"] for item in group_items)
+            # Calculate the pt range this bucket covers (e.g., bucket 9 = 18-20pt)
+            bucket_range_min = original_pt_bucket * 2
+            bucket_range_max = bucket_range_min + 2
 
             logger.info(
                 "font_size_group_normalized",
                 slide=slide_idx,
-                original_pt=original_pt,
+                original_pt_range=f"{bucket_range_min}-{bucket_range_max}pt",
                 item_count=len(group_items),
                 min_calculated_pt=round(min_calculated_pt, 1),
                 texts=[item["para_text"][:20] for item in group_items[:3]],
             )
 
-            # Apply minimum to all items in group
+            # Apply minimum to all items in group - KEY INCLUDES SLIDE_IDX
             for item in group_items:
-                normalized[item["para_text"]] = min_calculated_pt
+                key = (item["slide_idx"], item["para_text"])
+                normalized[key] = min_calculated_pt
 
         return normalized
 
@@ -515,14 +528,15 @@ class PPTService:
         shape,
         translations: dict[str, str],
         applied_tracker: dict[str, bool],
-        normalized_sizes: dict[str, float],
+        normalized_sizes: dict[tuple[int, str], float],
+        slide_idx: int,
         target_font: str = "Arial",
         depth: int = 0
     ):
         """Apply translations to a single shape at paragraph level.
 
-        Uses normalized_sizes dict to ensure consistent font sizes across
-        texts that originally had the same size.
+        Uses normalized_sizes dict with (slide_idx, para_text) key to ensure
+        each slide's font sizes are calculated independently.
         """
         shape_type = str(getattr(shape, 'shape_type', 'unknown'))
         shape_id = getattr(shape, 'shape_id', 'unknown')
@@ -531,7 +545,7 @@ class PPTService:
         if isinstance(shape, GroupShape) and depth < 10:
             try:
                 for child_shape in shape.shapes:
-                    self._apply_to_shape(child_shape, translations, applied_tracker, normalized_sizes, target_font, depth + 1)
+                    self._apply_to_shape(child_shape, translations, applied_tracker, normalized_sizes, slide_idx, target_font, depth + 1)
             except Exception as e:
                 logger.debug("group_apply_error", error=str(e))
             # Don't return - continue to check for text frames
@@ -585,7 +599,8 @@ class PPTService:
                     translated = translations[para_text]
 
                     # Use pre-calculated normalized font size if available
-                    normalized_pt = normalized_sizes.get(para_text)
+                    # Key is (slide_idx, para_text) to ensure slides are independent
+                    normalized_pt = normalized_sizes.get((slide_idx, para_text))
 
                     # INFO level log for production visibility
                     logger.info(
@@ -679,7 +694,8 @@ class PPTService:
                             para_text = para.text.strip()
                             if para_text in translations:
                                 translated = translations[para_text]
-                                normalized_pt = normalized_sizes.get(para_text)
+                                # Key is (slide_idx, para_text) for slide-independent lookup
+                                normalized_pt = normalized_sizes.get((slide_idx, para_text))
 
                                 if para.runs:
                                     first_run = para.runs[0]
@@ -745,9 +761,9 @@ class PPTService:
         logger.info("font_normalization_pass2_complete", normalized_count=len(normalized_sizes))
 
         # === PASS 3: Apply translations with normalized font sizes ===
-        for slide in self.presentation.slides:
+        for slide_idx, slide in enumerate(self.presentation.slides, 1):
             for shape in slide.shapes:
-                self._apply_to_shape(shape, translations, applied_tracker, normalized_sizes)
+                self._apply_to_shape(shape, translations, applied_tracker, normalized_sizes, slide_idx)
 
         self.presentation.save(output_path)
 
@@ -788,7 +804,9 @@ class PPTService:
 
         # Separate alignment and font_size adjustments
         alignment_adjustments: list[dict] = []
-        font_size_by_slide: dict[int, str] = {}  # slide_num -> direction (decrease/increase)
+        # Track font size adjustment counts per slide for compounding
+        # slide_num -> {"decrease": count, "increase": count}
+        font_size_counts_by_slide: dict[int, dict[str, int]] = {}
 
         for adj in adjustments:
             adj_type = adj.get("adjustment_type", "")
@@ -797,10 +815,13 @@ class PPTService:
             if adj_type == "alignment":
                 alignment_adjustments.append(adj)
             elif adj_type == "font_size":
-                # For font size, we'll apply per-slide grouping
-                # Use the first direction found for each slide (usually "decrease")
-                if slide_num not in font_size_by_slide:
-                    font_size_by_slide[slide_num] = adj.get("target_value", "decrease")
+                # Count font size adjustments per slide for proper compounding
+                # Multiple "decrease" requests should compound (0.85^n)
+                if slide_num not in font_size_counts_by_slide:
+                    font_size_counts_by_slide[slide_num] = {"decrease": 0, "increase": 0}
+                direction = adj.get("target_value", "decrease")
+                if direction in ("decrease", "increase"):
+                    font_size_counts_by_slide[slide_num][direction] += 1
 
         # Group alignment adjustments by slide
         alignments_by_slide: dict[int, list[dict]] = {}
@@ -829,15 +850,29 @@ class PPTService:
                         shape, slide_alignments, alignment_map
                     )
 
-            # Apply font size adjustments (per-slide grouping)
-            if slide_idx in font_size_by_slide:
-                direction = font_size_by_slide[slide_idx]
-                applied_count += self._apply_font_size_to_slide(slide, direction)
-                logger.info(
-                    "font_size_slide_adjusted",
-                    slide=slide_idx,
-                    direction=direction,
-                )
+            # Apply font size adjustments (per-slide with compounding)
+            if slide_idx in font_size_counts_by_slide:
+                counts = font_size_counts_by_slide[slide_idx]
+                # Calculate net adjustment: decrease_count - increase_count
+                # Then apply compounding factor
+                net_decrease = counts["decrease"] - counts["increase"]
+                if net_decrease != 0:
+                    # Compound factor: 0.85^n for decrease, 1.2^n for increase
+                    if net_decrease > 0:
+                        # Net decrease: 0.85^net_decrease
+                        compound_factor = 0.85 ** net_decrease
+                    else:
+                        # Net increase: 1.2^abs(net_decrease)
+                        compound_factor = 1.2 ** abs(net_decrease)
+
+                    applied_count += self._apply_font_size_to_slide_with_factor(slide, compound_factor)
+                    logger.info(
+                        "font_size_slide_adjusted",
+                        slide=slide_idx,
+                        decrease_count=counts["decrease"],
+                        increase_count=counts["increase"],
+                        compound_factor=round(compound_factor, 3),
+                    )
 
         self.presentation.save(output_path)
 
@@ -849,6 +884,23 @@ class PPTService:
 
         return output_path, applied_count
 
+    def _apply_font_size_to_slide_with_factor(self, slide, adjustment_factor: float) -> int:
+        """Apply font size adjustment to all text boxes on a slide with a specific factor.
+
+        Args:
+            slide: The slide to adjust
+            adjustment_factor: Multiplier for font sizes (e.g., 0.85 for 15% decrease)
+
+        Returns:
+            Number of adjustments made
+        """
+        applied = 0
+
+        for shape in slide.shapes:
+            applied += self._apply_font_size_to_shape_recursive(shape, adjustment_factor)
+
+        return applied
+
     def _apply_font_size_to_slide(self, slide, direction: str) -> int:
         """Apply font size adjustment to all text boxes on a slide.
 
@@ -859,13 +911,8 @@ class PPTService:
         Returns:
             Number of adjustments made
         """
-        applied = 0
         adjustment_factor = 1.2 if direction == "increase" else 0.85
-
-        for shape in slide.shapes:
-            applied += self._apply_font_size_to_shape_recursive(shape, adjustment_factor)
-
-        return applied
+        return self._apply_font_size_to_slide_with_factor(slide, adjustment_factor)
 
     def _apply_font_size_to_shape_recursive(self, shape, adjustment_factor: float, depth: int = 0) -> int:
         """Recursively apply font size adjustment to a shape and its children."""

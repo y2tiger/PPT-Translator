@@ -744,6 +744,13 @@ async def process_translation(
                                 )
 
                     # Apply format adjustments (alignment, font size) from Visual QA
+                    logger.info(
+                        "visual_qa_format_adjustments_received",
+                        file_id=file_id,
+                        iteration=visual_iteration,
+                        count=len(visual_report.format_adjustments) if visual_report.format_adjustments else 0,
+                        has_adjustments=bool(visual_report.format_adjustments),
+                    )
                     if visual_report.format_adjustments:
                         translation_status[file_id] = TranslationStatus(
                             status="processing",
@@ -793,8 +800,9 @@ async def process_translation(
                                 "adjustment_type": adj.adjustment_type,
                                 "target_value": adj.target_value,
                             })
-                            logger.debug(
+                            logger.info(
                                 "format_adjustment_mapped",
+                                slide=adj.slide_number,
                                 original=adj.text[:30] if adj.text else "",
                                 translated=translated_text[:30] if translated_text else "",
                                 type=adj.adjustment_type,
@@ -803,6 +811,13 @@ async def process_translation(
 
                         # Apply adjustments to the translated PPT
                         # IMPORTANT: Load translated_for_qa since it contains the translated text
+                        logger.info(
+                            "applying_format_adjustments",
+                            file_id=file_id,
+                            iteration=visual_iteration,
+                            count=len(adjustments_to_apply),
+                            types=[a.get("adjustment_type") for a in adjustments_to_apply],
+                        )
                         translated_ppt_service = PPTService(str(translated_for_qa))
                         _, applied_count = translated_ppt_service.apply_adjustments(
                             adjustments_to_apply, str(translated_for_qa)
@@ -811,9 +826,17 @@ async def process_translation(
                         # Accumulate adjustments for re-application after each translation
                         all_format_adjustments.extend(adjustments_to_apply)
 
+                        logger.info(
+                            "format_adjustments_result",
+                            file_id=file_id,
+                            iteration=visual_iteration,
+                            requested=len(adjustments_to_apply),
+                            applied=applied_count,
+                        )
+
                         if applied_count > 0:
                             has_work_to_do = True
-                            logger.debug(
+                            logger.info(
                                 "format_adjustments_applied",
                                 file_id=file_id,
                                 iteration=visual_iteration,

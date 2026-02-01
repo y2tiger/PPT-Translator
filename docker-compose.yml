@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  ppt-translator:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # 코드 변경 시 자동 반영 (hot reload)
+      - ./app:/app/app
+      - ./static:/app/static
+      # 업로드 파일 로컬 저장
+      - ./uploads:/app/uploads
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+    # 개발 모드: 코드 변경 시 자동 리로드
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
