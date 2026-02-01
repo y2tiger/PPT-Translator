@@ -465,10 +465,13 @@ class PPTService:
             except Exception as e:
                 logger.debug("table_collect_error", error=str(e))
 
-    def _normalize_font_sizes(self, requirements: list[dict]) -> dict[str, float]:
+    def _normalize_font_sizes(self, requirements: list[dict]) -> dict[tuple[int, str], float]:
         """
         Pass 2: Group texts by SLIDE and original font size, normalize to group minimum.
-        Returns a dict mapping para_text to normalized font size.
+        Returns a dict mapping (slide_idx, para_text) to normalized font size.
+
+        IMPORTANT: Key includes slide_idx to ensure each slide is processed independently.
+        Same text on different slides will have independent font size calculations.
 
         Grouping is done per-slide to maintain visual consistency within each slide.
         All texts with the same original font size on a slide will get the same
@@ -476,8 +479,6 @@ class PPTService:
 
         Uses ±2pt tolerance for grouping to handle minor font size variations
         (e.g., 18.4pt and 18.6pt are grouped together as they appear visually same).
-
-        Visual QA can later detect and fix individual sizing issues if needed.
         """
         # Group by (slide_idx, original_pt_bucket) - per-slide grouping with tolerance
         # Use 2pt buckets: 0-2, 2-4, 4-6, etc. to group similar sizes
@@ -496,7 +497,8 @@ class PPTService:
             groups[group_key].append(req)
 
         # For each group, find the minimum calculated_pt
-        normalized: dict[str, float] = {}
+        # Key is (slide_idx, para_text) to ensure slides are independent
+        normalized: dict[tuple[int, str], float] = {}
 
         for group_key, group_items in groups.items():
             slide_idx, original_pt_bucket = group_key
@@ -514,9 +516,10 @@ class PPTService:
                 texts=[item["para_text"][:20] for item in group_items[:3]],
             )
 
-            # Apply minimum to all items in group
+            # Apply minimum to all items in group - KEY INCLUDES SLIDE_IDX
             for item in group_items:
-                normalized[item["para_text"]] = min_calculated_pt
+                key = (item["slide_idx"], item["para_text"])
+                normalized[key] = min_calculated_pt
 
         return normalized
 
@@ -525,14 +528,15 @@ class PPTService:
         shape,
         translations: dict[str, str],
         applied_tracker: dict[str, bool],
-        normalized_sizes: dict[str, float],
+        normalized_sizes: dict[tuple[int, str], float],
+        slide_idx: int,
         target_font: str = "Arial",
         depth: int = 0
     ):
         """Apply translations to a single shape at paragraph level.
 
-        Uses normalized_sizes dict to ensure consistent font sizes across
-        texts that originally had the same size.
+        Uses normalized_sizes dict with (slide_idx, para_text) key to ensure
+        each slide's font sizes are calculated independently.
         """
         shape_type = str(getattr(shape, 'shape_type', 'unknown'))
         shape_id = getattr(shape, 'shape_id', 'unknown')
@@ -541,7 +545,7 @@ class PPTService:
         if isinstance(shape, GroupShape) and depth < 10:
             try:
                 for child_shape in shape.shapes:
-                    self._apply_to_shape(child_shape, translations, applied_tracker, normalized_sizes, target_font, depth + 1)
+                    self._apply_to_shape(child_shape, translations, applied_tracker, normalized_sizes, slide_idx, target_font, depth + 1)
             except Exception as e:
                 logger.debug("group_apply_error", error=str(e))
             # Don't return - continue to check for text frames
@@ -595,7 +599,8 @@ class PPTService:
                     translated = translations[para_text]
 
                     # Use pre-calculated normalized font size if available
-                    normalized_pt = normalized_sizes.get(para_text)
+                    # Key is (slide_idx, para_text) to ensure slides are independent
+                    normalized_pt = normalized_sizes.get((slide_idx, para_text))
 
                     # INFO level log for production visibility
                     logger.info(
@@ -689,7 +694,8 @@ class PPTService:
                             para_text = para.text.strip()
                             if para_text in translations:
                                 translated = translations[para_text]
-                                normalized_pt = normalized_sizes.get(para_text)
+                                # Key is (slide_idx, para_text) for slide-independent lookup
+                                normalized_pt = normalized_sizes.get((slide_idx, para_text))
 
                                 if para.runs:
                                     first_run = para.runs[0]
@@ -755,9 +761,9 @@ class PPTService:
         logger.info("font_normalization_pass2_complete", normalized_count=len(normalized_sizes))
 
         # === PASS 3: Apply translations with normalized font sizes ===
-        for slide in self.presentation.slides:
+        for slide_idx, slide in enumerate(self.presentation.slides, 1):
             for shape in slide.shapes:
-                self._apply_to_shape(shape, translations, applied_tracker, normalized_sizes)
+                self._apply_to_shape(shape, translations, applied_tracker, normalized_sizes, slide_idx)
 
         self.presentation.save(output_path)
 
