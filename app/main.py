@@ -829,31 +829,8 @@ async def process_translation(
                             message=f"시각적 품질 검증 {visual_iteration}회차: {formatting_issues_count}개 포맷 이슈 재처리 중...",
                         )
 
-                    # Decide whether to continue iterating
-                    # Continue if: we have work to do OR (score is below threshold AND not last iteration)
-                    is_last_iteration = (visual_iteration >= max_iterations)
-                    score_below_threshold = (visual_report.overall_score < VISUAL_QA_QUALITY_THRESHOLD)
-
-                    if not has_work_to_do and (is_last_iteration or not score_below_threshold):
-                        # No improvements possible and either last iteration or score is good enough
-                        logger.debug(
-                            "visual_qa_iteration_complete",
-                            file_id=file_id,
-                            iteration=visual_iteration,
-                            score=visual_report.overall_score,
-                            threshold=VISUAL_QA_QUALITY_THRESHOLD,
-                            is_last=is_last_iteration,
-                        )
-                        break
-                    elif not has_work_to_do and score_below_threshold and not is_last_iteration:
-                        # No specific improvements but score is still low - continue to next iteration
-                        logger.debug(
-                            "continuing_despite_no_work",
-                            file_id=file_id,
-                            iteration=visual_iteration,
-                            score=visual_report.overall_score,
-                            reason="score below threshold, user requested more iterations",
-                        )
+                    # Continue until we've completed all requested iterations
+                    # Score doesn't matter - user wants N iterations, we run N iterations
 
                 except Exception as visual_error:
                     logger.warning(
