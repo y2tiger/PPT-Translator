@@ -80,8 +80,8 @@ function loadOptionsFromLocalStorage() {
             if (options.visualQaIterations !== undefined) {
                 document.getElementById('visual-qa-iterations').value = options.visualQaIterations;
             } else if (typeof options.enableVisualQA === 'boolean') {
-                // Migrate old format: true -> 2, false -> 0
-                document.getElementById('visual-qa-iterations').value = options.enableVisualQA ? '2' : '0';
+                // Migrate old format: true -> 1, false -> 0
+                document.getElementById('visual-qa-iterations').value = options.enableVisualQA ? '1' : '0';
             }
             if (options.translationStyle) {
                 const styleRadio = document.querySelector(`input[name="translation-style"][value="${options.translationStyle}"]`);
