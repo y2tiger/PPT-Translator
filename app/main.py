@@ -698,30 +698,51 @@ async def process_translation(
                     has_work_to_do = False
 
                     if visual_report.texts_to_retranslate:
-                        translation_status[file_id] = TranslationStatus(
-                            status="processing",
-                            progress=70 + (visual_iteration * 5) + 4,
-                            total_slides=total_slides,
-                            current_slide=total_slides,
-                            review_loop=visual_iteration,
-                            message=f"시각적 품질 검증 {visual_iteration}회차: {len(visual_report.texts_to_retranslate)}개 텍스트 재번역 중...",
-                        )
+                        # IMPORTANT: Filter texts - only retranslate if they exist in original extraction
+                        # This prevents retranslating already-translated text (e.g., Polish back to Korean)
+                        original_texts_set = set(text for texts in texts_by_slide.values() for text in texts)
+                        valid_texts_to_retranslate = [
+                            t for t in visual_report.texts_to_retranslate
+                            if t in original_texts_set
+                        ]
 
-                        retranslations = await visual_qa_agent.get_retranslations(
-                            texts=visual_report.texts_to_retranslate,
-                            source_lang=source_lang,
-                            target_lang=target_lang,
-                        )
-
-                        if retranslations:
-                            all_translations.update(retranslations)
-                            has_work_to_do = True
+                        # Log filtering results
+                        filtered_out = len(visual_report.texts_to_retranslate) - len(valid_texts_to_retranslate)
+                        if filtered_out > 0:
                             logger.info(
-                                "visual_retranslations_applied",
+                                "retranslation_filtered",
                                 file_id=file_id,
-                                iteration=visual_iteration,
-                                count=len(retranslations),
+                                original_count=len(visual_report.texts_to_retranslate),
+                                valid_count=len(valid_texts_to_retranslate),
+                                filtered_out=filtered_out,
+                                filtered_texts=[t for t in visual_report.texts_to_retranslate if t not in original_texts_set][:5],
                             )
+
+                        if valid_texts_to_retranslate:
+                            translation_status[file_id] = TranslationStatus(
+                                status="processing",
+                                progress=70 + (visual_iteration * 5) + 4,
+                                total_slides=total_slides,
+                                current_slide=total_slides,
+                                review_loop=visual_iteration,
+                                message=f"시각적 품질 검증 {visual_iteration}회차: {len(valid_texts_to_retranslate)}개 텍스트 재번역 중...",
+                            )
+
+                            retranslations = await visual_qa_agent.get_retranslations(
+                                texts=valid_texts_to_retranslate,
+                                source_lang=source_lang,
+                                target_lang=target_lang,
+                            )
+
+                            if retranslations:
+                                all_translations.update(retranslations)
+                                has_work_to_do = True
+                                logger.info(
+                                    "visual_retranslations_applied",
+                                    file_id=file_id,
+                                    iteration=visual_iteration,
+                                    count=len(retranslations),
+                                )
 
                     # If we have formatting issues, that counts as "work to do" for next iteration
                     # The next iteration will re-apply translations with the already-aggressive font reduction
