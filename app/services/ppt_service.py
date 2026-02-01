@@ -786,13 +786,29 @@ class PPTService:
         if not adjustments:
             return output_path, 0
 
-        # Group adjustments by slide for efficiency
-        adjustments_by_slide: dict[int, list[dict]] = {}
+        # Separate alignment and font_size adjustments
+        alignment_adjustments: list[dict] = []
+        font_size_by_slide: dict[int, str] = {}  # slide_num -> direction (decrease/increase)
+
         for adj in adjustments:
+            adj_type = adj.get("adjustment_type", "")
             slide_num = adj.get("slide_number", 0)
-            if slide_num not in adjustments_by_slide:
-                adjustments_by_slide[slide_num] = []
-            adjustments_by_slide[slide_num].append(adj)
+
+            if adj_type == "alignment":
+                alignment_adjustments.append(adj)
+            elif adj_type == "font_size":
+                # For font size, we'll apply per-slide grouping
+                # Use the first direction found for each slide (usually "decrease")
+                if slide_num not in font_size_by_slide:
+                    font_size_by_slide[slide_num] = adj.get("target_value", "decrease")
+
+        # Group alignment adjustments by slide
+        alignments_by_slide: dict[int, list[dict]] = {}
+        for adj in alignment_adjustments:
+            slide_num = adj.get("slide_number", 0)
+            if slide_num not in alignments_by_slide:
+                alignments_by_slide[slide_num] = []
+            alignments_by_slide[slide_num].append(adj)
 
         applied_count = 0
 
@@ -805,14 +821,22 @@ class PPTService:
         }
 
         for slide_idx, slide in enumerate(self.presentation.slides, 1):
-            if slide_idx not in adjustments_by_slide:
-                continue
+            # Apply alignment adjustments (individual text matching)
+            if slide_idx in alignments_by_slide:
+                slide_alignments = alignments_by_slide[slide_idx]
+                for shape in slide.shapes:
+                    applied_count += self._apply_alignment_to_shape(
+                        shape, slide_alignments, alignment_map
+                    )
 
-            slide_adjustments = adjustments_by_slide[slide_idx]
-
-            for shape in slide.shapes:
-                applied_count += self._apply_adjustments_to_shape(
-                    shape, slide_adjustments, alignment_map
+            # Apply font size adjustments (per-slide grouping)
+            if slide_idx in font_size_by_slide:
+                direction = font_size_by_slide[slide_idx]
+                applied_count += self._apply_font_size_to_slide(slide, direction)
+                logger.info(
+                    "font_size_slide_adjusted",
+                    slide=slide_idx,
+                    direction=direction,
                 )
 
         self.presentation.save(output_path)
@@ -825,59 +849,108 @@ class PPTService:
 
         return output_path, applied_count
 
-    def _apply_adjustments_to_shape(
+    def _apply_font_size_to_slide(self, slide, direction: str) -> int:
+        """Apply font size adjustment to all text boxes on a slide.
+
+        Args:
+            slide: The slide to adjust
+            direction: "increase" or "decrease"
+
+        Returns:
+            Number of adjustments made
+        """
+        applied = 0
+        adjustment_factor = 1.2 if direction == "increase" else 0.85
+
+        for shape in slide.shapes:
+            applied += self._apply_font_size_to_shape_recursive(shape, adjustment_factor)
+
+        return applied
+
+    def _apply_font_size_to_shape_recursive(self, shape, adjustment_factor: float, depth: int = 0) -> int:
+        """Recursively apply font size adjustment to a shape and its children."""
+        applied = 0
+
+        # Handle group shapes
+        if isinstance(shape, GroupShape) and depth < 10:
+            try:
+                for child_shape in shape.shapes:
+                    applied += self._apply_font_size_to_shape_recursive(
+                        child_shape, adjustment_factor, depth + 1
+                    )
+            except Exception as e:
+                logger.debug("group_font_adjustment_error", error=str(e))
+
+        # Handle text frames
+        if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
+            text_frame = shape.text_frame
+            for paragraph in text_frame.paragraphs:
+                for run in paragraph.runs:
+                    if run.font.size:
+                        old_size_pt = run.font.size / 12700
+                        new_size_pt = old_size_pt * adjustment_factor
+                        new_size_pt = max(6.0, min(72.0, new_size_pt))
+                        run.font.size = Pt(new_size_pt)
+                        applied += 1
+
+        # Handle tables
+        if hasattr(shape, 'has_table') and shape.has_table:
+            try:
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        for paragraph in cell.text_frame.paragraphs:
+                            for run in paragraph.runs:
+                                if run.font.size:
+                                    old_size_pt = run.font.size / 12700
+                                    new_size_pt = old_size_pt * adjustment_factor
+                                    new_size_pt = max(6.0, min(72.0, new_size_pt))
+                                    run.font.size = Pt(new_size_pt)
+                                    applied += 1
+            except Exception as e:
+                logger.debug("table_font_adjustment_error", error=str(e))
+
+        return applied
+
+    def _apply_alignment_to_shape(
         self,
         shape,
         adjustments: list[dict],
         alignment_map: dict,
         depth: int = 0
     ) -> int:
-        """Apply adjustments to a single shape and its children."""
+        """Apply alignment adjustments to a single shape and its children."""
         applied_count = 0
 
         # Handle group shapes recursively
         if isinstance(shape, GroupShape) and depth < 10:
             try:
                 for child_shape in shape.shapes:
-                    applied_count += self._apply_adjustments_to_shape(
+                    applied_count += self._apply_alignment_to_shape(
                         child_shape, adjustments, alignment_map, depth + 1
                     )
             except Exception as e:
-                logger.debug("group_adjustment_error", error=str(e))
+                logger.debug("group_alignment_error", error=str(e))
 
         # Handle text frames
         if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
             text_frame = shape.text_frame
-
-            # Get all text in this shape
             shape_text = " ".join(p.text.strip() for p in text_frame.paragraphs if p.text.strip())
 
             for adj in adjustments:
                 adj_text = adj.get("text", "")
-                adj_type = adj.get("adjustment_type", "")
                 target_value = adj.get("target_value", "")
 
-                # Check if this shape contains the target text
-                if adj_text and adj_text in shape_text:
-                    if adj_type == "alignment" and target_value in alignment_map:
-                        # Apply alignment adjustment
-                        old_anchor = text_frame.anchor
-                        new_anchor = alignment_map[target_value]
-                        text_frame.anchor = new_anchor
-
-                        logger.info(
-                            "alignment_adjusted",
-                            text=adj_text[:30],
-                            old=str(old_anchor),
-                            new=target_value,
-                        )
-                        applied_count += 1
-
-                    elif adj_type == "font_size":
-                        # Apply font size adjustment
-                        applied_count += self._adjust_font_size_in_shape(
-                            text_frame, adj_text, target_value
-                        )
+                if adj_text and adj_text in shape_text and target_value in alignment_map:
+                    old_anchor = text_frame.anchor
+                    new_anchor = alignment_map[target_value]
+                    text_frame.anchor = new_anchor
+                    logger.info(
+                        "alignment_adjusted",
+                        text=adj_text[:30],
+                        old=str(old_anchor),
+                        new=target_value,
+                    )
+                    applied_count += 1
 
         # Handle tables
         if hasattr(shape, 'has_table') and shape.has_table:
@@ -889,61 +962,13 @@ class PPTService:
 
                         for adj in adjustments:
                             adj_text = adj.get("text", "")
-                            adj_type = adj.get("adjustment_type", "")
                             target_value = adj.get("target_value", "")
 
-                            if adj_text and adj_text in cell_text:
-                                if adj_type == "alignment" and target_value in alignment_map:
-                                    text_frame.anchor = alignment_map[target_value]
-                                    applied_count += 1
-                                elif adj_type == "font_size":
-                                    applied_count += self._adjust_font_size_in_shape(
-                                        text_frame, adj_text, target_value
-                                    )
+                            if adj_text and adj_text in cell_text and target_value in alignment_map:
+                                text_frame.anchor = alignment_map[target_value]
+                                applied_count += 1
             except Exception as e:
-                logger.debug("table_adjustment_error", error=str(e))
+                logger.debug("table_alignment_error", error=str(e))
 
         return applied_count
 
-    def _adjust_font_size_in_shape(
-        self,
-        text_frame,
-        target_text: str,
-        direction: str
-    ) -> int:
-        """Adjust font size for text in a text frame.
-
-        Args:
-            text_frame: The text frame to adjust
-            target_text: The text to find
-            direction: "increase" or "decrease"
-
-        Returns:
-            Number of adjustments made
-        """
-        applied = 0
-        adjustment_factor = 1.2 if direction == "increase" else 0.85
-
-        for paragraph in text_frame.paragraphs:
-            para_text = paragraph.text.strip()
-            if target_text in para_text:
-                for run in paragraph.runs:
-                    if run.font.size:
-                        old_size_pt = run.font.size / 12700
-                        new_size_pt = old_size_pt * adjustment_factor
-
-                        # Clamp to reasonable range
-                        new_size_pt = max(6.0, min(72.0, new_size_pt))
-
-                        run.font.size = Pt(new_size_pt)
-
-                        logger.info(
-                            "font_size_adjusted",
-                            text=target_text[:30],
-                            direction=direction,
-                            old_pt=round(old_size_pt, 1),
-                            new_pt=round(new_size_pt, 1),
-                        )
-                        applied += 1
-
-        return applied
