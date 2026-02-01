@@ -459,13 +459,13 @@ async def process_translation(
 
         # Visual QA Loop - Compare images and iteratively improve (optional)
         qa_history[file_id] = []
-        best_score = 0  # Initialize outside to avoid NameError when visual_qa_iterations <= 0
-        all_format_adjustments = []  # Accumulate adjustments across all iterations
+        best_score = 0
 
         if visual_qa_iterations <= 0:
             logger.debug("visual_qa_disabled", file_id=file_id)
         else:
             visual_qa_agent = VisualQAAgent(api_key)
+            all_format_adjustments = []  # Accumulate adjustments across iterations
             max_iterations = min(visual_qa_iterations, 3)  # Cap at 3
 
             # Create directory for QA images
@@ -882,7 +882,6 @@ async def process_translation(
             "final_application_summary",
             file_id=file_id,
             total_translations=len(all_translations),
-            total_adjustments=len(all_format_adjustments),
             visual_score=best_score,
         )
 
