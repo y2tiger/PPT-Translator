@@ -458,12 +458,13 @@ async def process_translation(
 
         # Visual QA Loop - Compare images and iteratively improve (optional)
         qa_history[file_id] = []
+        best_score = 0  # Initialize outside to avoid NameError when visual_qa_iterations <= 0
+        last_format_adjustments = []  # Store adjustments from last iteration for final application
 
         if visual_qa_iterations <= 0:
             logger.info("visual_qa_disabled", file_id=file_id)
         else:
             visual_qa_agent = VisualQAAgent(api_key)
-            best_score = 0
             max_iterations = min(visual_qa_iterations, 3)  # Cap at 3
 
             # Create directory for QA images
@@ -793,6 +794,9 @@ async def process_translation(
                             adjustments_to_apply, str(translated_for_qa)
                         )
 
+                        # Store adjustments for final application (important for 1-iteration case)
+                        last_format_adjustments = adjustments_to_apply
+
                         if applied_count > 0:
                             has_work_to_do = True
                             logger.info(
@@ -816,14 +820,31 @@ async def process_translation(
                             message=f"시각적 품질 검증 {visual_iteration}회차: {formatting_issues_count}개 포맷 이슈 재처리 중...",
                         )
 
-                    if not has_work_to_do:
-                        # No improvements possible
-                        logger.warning(
-                            "no_visual_improvements",
+                    # Decide whether to continue iterating
+                    # Continue if: we have work to do OR (score is below threshold AND not last iteration)
+                    is_last_iteration = (visual_iteration >= max_iterations)
+                    score_below_threshold = (visual_report.overall_score < VISUAL_QA_QUALITY_THRESHOLD)
+
+                    if not has_work_to_do and (is_last_iteration or not score_below_threshold):
+                        # No improvements possible and either last iteration or score is good enough
+                        logger.info(
+                            "visual_qa_iteration_complete",
                             file_id=file_id,
                             iteration=visual_iteration,
+                            score=visual_report.overall_score,
+                            threshold=VISUAL_QA_QUALITY_THRESHOLD,
+                            is_last=is_last_iteration,
                         )
                         break
+                    elif not has_work_to_do and score_below_threshold and not is_last_iteration:
+                        # No specific improvements but score is still low - continue to next iteration
+                        logger.info(
+                            "continuing_despite_no_work",
+                            file_id=file_id,
+                            iteration=visual_iteration,
+                            score=visual_report.overall_score,
+                            reason="score below threshold, user requested more iterations",
+                        )
 
                 except Exception as visual_error:
                     logger.warning(
@@ -865,6 +886,17 @@ async def process_translation(
         if target_font:
             apply_font_to_ppt(str(output_path), str(output_path), target_font)
             logger.info("font_applied", file_id=file_id, font=target_font)
+
+        # Apply format adjustments from Visual QA to final output
+        if last_format_adjustments:
+            final_ppt_service = PPTService(str(output_path))
+            _, adj_applied = final_ppt_service.apply_adjustments(last_format_adjustments, str(output_path))
+            logger.info(
+                "final_format_adjustments_applied",
+                file_id=file_id,
+                requested=len(last_format_adjustments),
+                applied=adj_applied,
+            )
 
         # Log final summary
         applied_count = sum(1 for v in applied_tracker.values() if v)
