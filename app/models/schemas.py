@@ -106,6 +106,7 @@ class QAIterationResponse(BaseModel):
     critical_issues_count: int
     texts_retranslated: int
     formatting_issues_count: int = 0  # FONT_SIZE, TRUNCATION issues
+    format_adjustments_applied: int = 0  # Alignment/font size adjustments applied
     algorithm_improvements: list[str]
     slide_comparisons: list[SlideComparisonResponse]
 

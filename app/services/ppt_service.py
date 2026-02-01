@@ -2,6 +2,7 @@ import structlog
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
 from pptx.util import Pt
+from pptx.enum.text import MSO_ANCHOR
 from typing import Generator
 
 logger = structlog.get_logger(__name__)
@@ -745,3 +746,188 @@ class PPTService:
         )
 
         return output_path, applied_tracker
+
+    def apply_adjustments(
+        self,
+        adjustments: list[dict],
+        output_path: str
+    ) -> tuple[str, int]:
+        """
+        Apply format adjustments (alignment, font size) based on Visual QA feedback.
+
+        Args:
+            adjustments: List of adjustment dicts with keys:
+                - slide_number: int
+                - text: str (the translated text to find)
+                - adjustment_type: "alignment" or "font_size"
+                - target_value: For alignment: "top", "middle", "bottom"
+                                For font_size: "increase", "decrease"
+            output_path: Path to save the adjusted presentation
+
+        Returns:
+            Tuple of (output_path, number of adjustments applied)
+        """
+        if not adjustments:
+            return output_path, 0
+
+        # Group adjustments by slide for efficiency
+        adjustments_by_slide: dict[int, list[dict]] = {}
+        for adj in adjustments:
+            slide_num = adj.get("slide_number", 0)
+            if slide_num not in adjustments_by_slide:
+                adjustments_by_slide[slide_num] = []
+            adjustments_by_slide[slide_num].append(adj)
+
+        applied_count = 0
+
+        # Map alignment string to MSO_ANCHOR enum
+        alignment_map = {
+            "top": MSO_ANCHOR.TOP,
+            "middle": MSO_ANCHOR.MIDDLE,
+            "center": MSO_ANCHOR.MIDDLE,
+            "bottom": MSO_ANCHOR.BOTTOM,
+        }
+
+        for slide_idx, slide in enumerate(self.presentation.slides, 1):
+            if slide_idx not in adjustments_by_slide:
+                continue
+
+            slide_adjustments = adjustments_by_slide[slide_idx]
+
+            for shape in slide.shapes:
+                applied_count += self._apply_adjustments_to_shape(
+                    shape, slide_adjustments, alignment_map
+                )
+
+        self.presentation.save(output_path)
+
+        logger.info(
+            "adjustments_applied",
+            total_adjustments=len(adjustments),
+            applied=applied_count,
+        )
+
+        return output_path, applied_count
+
+    def _apply_adjustments_to_shape(
+        self,
+        shape,
+        adjustments: list[dict],
+        alignment_map: dict,
+        depth: int = 0
+    ) -> int:
+        """Apply adjustments to a single shape and its children."""
+        applied_count = 0
+
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape) and depth < 10:
+            try:
+                for child_shape in shape.shapes:
+                    applied_count += self._apply_adjustments_to_shape(
+                        child_shape, adjustments, alignment_map, depth + 1
+                    )
+            except Exception as e:
+                logger.debug("group_adjustment_error", error=str(e))
+
+        # Handle text frames
+        if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
+            text_frame = shape.text_frame
+
+            # Get all text in this shape
+            shape_text = " ".join(p.text.strip() for p in text_frame.paragraphs if p.text.strip())
+
+            for adj in adjustments:
+                adj_text = adj.get("text", "")
+                adj_type = adj.get("adjustment_type", "")
+                target_value = adj.get("target_value", "")
+
+                # Check if this shape contains the target text
+                if adj_text and adj_text in shape_text:
+                    if adj_type == "alignment" and target_value in alignment_map:
+                        # Apply alignment adjustment
+                        old_anchor = text_frame.anchor
+                        new_anchor = alignment_map[target_value]
+                        text_frame.anchor = new_anchor
+
+                        logger.info(
+                            "alignment_adjusted",
+                            text=adj_text[:30],
+                            old=str(old_anchor),
+                            new=target_value,
+                        )
+                        applied_count += 1
+
+                    elif adj_type == "font_size":
+                        # Apply font size adjustment
+                        applied_count += self._adjust_font_size_in_shape(
+                            text_frame, adj_text, target_value
+                        )
+
+        # Handle tables
+        if hasattr(shape, 'has_table') and shape.has_table:
+            try:
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        text_frame = cell.text_frame
+                        cell_text = " ".join(p.text.strip() for p in text_frame.paragraphs if p.text.strip())
+
+                        for adj in adjustments:
+                            adj_text = adj.get("text", "")
+                            adj_type = adj.get("adjustment_type", "")
+                            target_value = adj.get("target_value", "")
+
+                            if adj_text and adj_text in cell_text:
+                                if adj_type == "alignment" and target_value in alignment_map:
+                                    text_frame.anchor = alignment_map[target_value]
+                                    applied_count += 1
+                                elif adj_type == "font_size":
+                                    applied_count += self._adjust_font_size_in_shape(
+                                        text_frame, adj_text, target_value
+                                    )
+            except Exception as e:
+                logger.debug("table_adjustment_error", error=str(e))
+
+        return applied_count
+
+    def _adjust_font_size_in_shape(
+        self,
+        text_frame,
+        target_text: str,
+        direction: str
+    ) -> int:
+        """Adjust font size for text in a text frame.
+
+        Args:
+            text_frame: The text frame to adjust
+            target_text: The text to find
+            direction: "increase" or "decrease"
+
+        Returns:
+            Number of adjustments made
+        """
+        applied = 0
+        adjustment_factor = 1.2 if direction == "increase" else 0.85
+
+        for paragraph in text_frame.paragraphs:
+            para_text = paragraph.text.strip()
+            if target_text in para_text:
+                for run in paragraph.runs:
+                    if run.font.size:
+                        old_size_pt = run.font.size / 12700
+                        new_size_pt = old_size_pt * adjustment_factor
+
+                        # Clamp to reasonable range
+                        new_size_pt = max(6.0, min(72.0, new_size_pt))
+
+                        run.font.size = Pt(new_size_pt)
+
+                        logger.info(
+                            "font_size_adjusted",
+                            text=target_text[:30],
+                            direction=direction,
+                            old_pt=round(old_size_pt, 1),
+                            new_pt=round(new_size_pt, 1),
+                        )
+                        applied += 1
+
+        return applied

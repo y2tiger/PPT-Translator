@@ -658,6 +658,7 @@ async def process_translation(
                         critical_issues_count=len(visual_report.critical_issues),
                         texts_retranslated=len(visual_report.texts_to_retranslate),
                         formatting_issues_count=formatting_issues_count,
+                        format_adjustments_applied=len(visual_report.format_adjustments),
                         algorithm_improvements=visual_report.algorithm_improvements,
                         slide_comparisons=slide_comparisons_response,
                     )
@@ -743,6 +744,43 @@ async def process_translation(
                                     iteration=visual_iteration,
                                     count=len(retranslations),
                                 )
+
+                    # Apply format adjustments (alignment, font size) from Visual QA
+                    if visual_report.format_adjustments:
+                        translation_status[file_id] = TranslationStatus(
+                            status="processing",
+                            progress=70 + (visual_iteration * 5) + 3,
+                            total_slides=total_slides,
+                            current_slide=total_slides,
+                            review_loop=visual_iteration,
+                            message=f"시각적 품질 검증 {visual_iteration}회차: {len(visual_report.format_adjustments)}개 포맷 조정 적용 중...",
+                        )
+
+                        # Convert FormatAdjustment objects to dicts for apply_adjustments
+                        adjustments_to_apply = [
+                            {
+                                "slide_number": adj.slide_number,
+                                "text": adj.text,
+                                "adjustment_type": adj.adjustment_type,
+                                "target_value": adj.target_value,
+                            }
+                            for adj in visual_report.format_adjustments
+                        ]
+
+                        # Apply adjustments to the translated PPT
+                        _, applied_count = ppt_service.apply_adjustments(
+                            adjustments_to_apply, str(translated_for_qa)
+                        )
+
+                        if applied_count > 0:
+                            has_work_to_do = True
+                            logger.info(
+                                "format_adjustments_applied",
+                                file_id=file_id,
+                                iteration=visual_iteration,
+                                requested=len(visual_report.format_adjustments),
+                                applied=applied_count,
+                            )
 
                     # If we have formatting issues, that counts as "work to do" for next iteration
                     # The next iteration will re-apply translations with the already-aggressive font reduction

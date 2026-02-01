@@ -38,11 +38,20 @@ if not LIBREOFFICE_AVAILABLE:
 class VisualIssue:
     """Visual issue found by comparing slides."""
     slide_number: int
-    issue_type: str  # "untranslated", "overflow", "layout", "missing"
+    issue_type: str  # "untranslated", "overflow", "layout", "missing", "alignment", "font_size"
     description: str
     original_text: str
     suggestion: str
     severity: str = "warning"  # "critical", "warning", "info"
+
+
+@dataclass
+class FormatAdjustment:
+    """Format adjustment to apply based on visual QA feedback."""
+    slide_number: int
+    text: str  # The text to adjust (original Korean text)
+    adjustment_type: str  # "alignment" or "font_size"
+    target_value: str  # For alignment: "top", "middle", "bottom"; For font_size: "increase", "decrease", or percentage like "80%"
 
 
 @dataclass
@@ -63,6 +72,7 @@ class VisualComparisonResult:
     issues: list[VisualIssue] = field(default_factory=list)
     quality_score: int = 0  # 0-100
     algorithm_suggestions: list[str] = field(default_factory=list)
+    format_adjustments: list[FormatAdjustment] = field(default_factory=list)
 
 
 @dataclass
@@ -77,6 +87,7 @@ class VisualQAReport:
     algorithm_improvements: list[str] = field(default_factory=list)
     texts_to_retranslate: list[str] = field(default_factory=list)
     texts_with_formatting_issues: list[str] = field(default_factory=list)  # FONT_SIZE, TRUNCATION issues
+    format_adjustments: list[FormatAdjustment] = field(default_factory=list)  # Alignment/sizing adjustments
 
 
 class VisualQAAgent:
@@ -219,15 +230,20 @@ Analyze and identify:
 2. **Text overflow**: Text that is cut off or extends beyond its container
 3. **Layout issues**: Text positioning problems, overlapping, or misalignment
 4. **Missing text**: Text present in original but completely missing in translation
+5. **Alignment mismatch**: Text vertical alignment differs from original (e.g., centered text now appears at top)
+6. **Font size mismatch**: Text appears significantly smaller or larger than original proportionally
 
 For each issue found, provide:
-- The original text (if visible)
+- The original text (in {source_name}, if visible)
 - Description of the problem
 - Suggested fix
+- For alignment issues: specify target alignment ("top", "middle", "bottom")
+- For font size issues: specify adjustment direction ("increase" or "decrease")
 
 Also provide:
 - Overall quality score (0-100)
 - Algorithm improvement suggestions - ONLY from the categories below:
+- Format adjustments - specific fixes to apply
 
 SUGGESTION CATEGORIES (choose the most relevant):
 - [EXTRACTION] Text not extracted: "특정 텍스트 '{{text}}' 추출 실패 - 슬라이드 {{N}}번의 {{위치}} 영역 확인 필요"
@@ -237,6 +253,7 @@ SUGGESTION CATEGORIES (choose the most relevant):
 - [GROUPED_SHAPE] Grouped object: "그룹 도형 내 텍스트 '{{text}}' 처리 실패 - 슬라이드 {{N}}번"
 - [TABLE] Table cell: "테이블 셀 텍스트 '{{text}}' 처리 필요 - 행{{R}}/열{{C}}"
 - [SPECIAL_CHAR] Special characters: "특수문자/기호 포함 텍스트 처리 필요: '{{text}}'"
+- [ALIGNMENT] Alignment mismatch: "정렬 불일치: '{{text}}' - 원본은 {{original_align}}, 번역본은 {{current_align}}"
 
 Return as JSON:
 {{
@@ -247,11 +264,35 @@ Return as JSON:
       "original_text": "생산기술학교",
       "description": "Korean text not translated",
       "suggestion": "Force translate this text"
+    }},
+    {{
+      "type": "alignment",
+      "original_text": "헤드램프의 사용 재료",
+      "description": "Text alignment changed from middle to top",
+      "suggestion": "Change alignment to middle"
+    }},
+    {{
+      "type": "font_size",
+      "original_text": "광학 특성",
+      "description": "Text appears much smaller than original",
+      "suggestion": "Increase font size"
     }}
   ],
   "algorithm_suggestions": [
     "[EXTRACTION] 특정 텍스트 '에스엘' 추출 실패 - 슬라이드 1번의 상단 로고 영역 확인 필요",
-    "[FONT_SIZE] 폰트 크기 축소 필요: 'Szkoła Technologii' (원문 5자 → 번역 18자, 3.6배 증가)"
+    "[ALIGNMENT] 정렬 불일치: '헤드램프의 사용 재료' - 원본은 middle, 번역본은 top"
+  ],
+  "format_adjustments": [
+    {{
+      "text": "헤드램프의 사용 재료",
+      "adjustment_type": "alignment",
+      "target_value": "middle"
+    }},
+    {{
+      "text": "광학 특성",
+      "adjustment_type": "font_size",
+      "target_value": "increase"
+    }}
   ]
 }}"""
 
@@ -307,11 +348,30 @@ Return as JSON:
                     severity="critical" if issue_data.get("type") == "untranslated" else "warning"
                 ))
 
+            # Parse format adjustments
+            format_adjustments = []
+            for adj_data in result.get("format_adjustments", []):
+                if adj_data.get("text") and adj_data.get("adjustment_type"):
+                    format_adjustments.append(FormatAdjustment(
+                        slide_number=slide_number,
+                        text=adj_data.get("text", ""),
+                        adjustment_type=adj_data.get("adjustment_type", ""),
+                        target_value=adj_data.get("target_value", "")
+                    ))
+                    logger.info(
+                        "format_adjustment_detected",
+                        slide=slide_number,
+                        text=adj_data.get("text", "")[:30],
+                        type=adj_data.get("adjustment_type"),
+                        target=adj_data.get("target_value")
+                    )
+
             return VisualComparisonResult(
                 slide_number=slide_number,
                 issues=issues,
                 quality_score=result.get("quality_score", 50),
-                algorithm_suggestions=result.get("algorithm_suggestions", [])
+                algorithm_suggestions=result.get("algorithm_suggestions", []),
+                format_adjustments=format_adjustments
             )
 
         except json.JSONDecodeError as e:
@@ -408,6 +468,7 @@ Return as JSON:
             comparisons = []
             all_issues = []
             all_suggestions = []
+            all_format_adjustments = []
             total_score = 0
             slide_comparisons = []
             current_batch = 0
@@ -458,6 +519,7 @@ Return as JSON:
                     comparisons.append(comparison)
                     all_issues.extend(comparison.issues)
                     all_suggestions.extend(comparison.algorithm_suggestions)
+                    all_format_adjustments.extend(comparison.format_adjustments)
                     total_score += comparison.quality_score
 
                     # Save images and create slide comparison
@@ -529,6 +591,7 @@ Return as JSON:
                 algorithm_improvements=unique_suggestions,
                 texts_to_retranslate=texts_to_retranslate,
                 texts_with_formatting_issues=texts_with_formatting_issues,
+                format_adjustments=all_format_adjustments,
             )
 
             logger.info(
@@ -538,6 +601,7 @@ Return as JSON:
                 overall_score=overall_score,
                 critical_issues=len(critical_issues),
                 suggestions=len(unique_suggestions),
+                format_adjustments=len(all_format_adjustments),
             )
 
             return report
