@@ -472,15 +472,16 @@ async def process_translation(
 
             # IMPORTANT: Create a backup copy of the original Korean PPT BEFORE any translations
             # This ensures we have an unmodified original for Visual QA comparison
+            # ALWAYS overwrite to ensure fresh backup (in case of retry with same file_id)
             import shutil
             original_backup_path = UPLOAD_DIR / f"{file_id}_original_backup.pptx"
-            if not original_backup_path.exists():
-                shutil.copy(file_path, original_backup_path)
-                logger.info(
-                    "original_backup_created",
-                    file_id=file_id,
-                    backup_path=str(original_backup_path),
-                )
+            shutil.copy(file_path, original_backup_path)
+            logger.info(
+                "original_backup_created",
+                file_id=file_id,
+                backup_path=str(original_backup_path),
+                source_path=str(file_path),
+            )
 
             for visual_iteration in range(1, max_iterations + 1):
                 # Apply current translations
