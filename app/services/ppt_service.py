@@ -941,16 +941,19 @@ class PPTService:
                 target_value = adj.get("target_value", "")
 
                 if adj_text and adj_text in shape_text and target_value in alignment_map:
-                    old_anchor = text_frame.anchor
-                    new_anchor = alignment_map[target_value]
-                    text_frame.anchor = new_anchor
-                    logger.info(
-                        "alignment_adjusted",
-                        text=adj_text[:30],
-                        old=str(old_anchor),
-                        new=target_value,
-                    )
-                    applied_count += 1
+                    try:
+                        old_anchor = getattr(text_frame, 'anchor', None)
+                        new_anchor = alignment_map[target_value]
+                        text_frame.anchor = new_anchor
+                        logger.info(
+                            "alignment_adjusted",
+                            text=adj_text[:30],
+                            old=str(old_anchor),
+                            new=target_value,
+                        )
+                        applied_count += 1
+                    except Exception as e:
+                        logger.debug("alignment_adjustment_error", text=adj_text[:30], error=str(e))
 
         # Handle tables
         if hasattr(shape, 'has_table') and shape.has_table:
@@ -965,8 +968,11 @@ class PPTService:
                             target_value = adj.get("target_value", "")
 
                             if adj_text and adj_text in cell_text and target_value in alignment_map:
-                                text_frame.anchor = alignment_map[target_value]
-                                applied_count += 1
+                                try:
+                                    text_frame.anchor = alignment_map[target_value]
+                                    applied_count += 1
+                                except Exception:
+                                    pass
             except Exception as e:
                 logger.debug("table_alignment_error", error=str(e))
 
