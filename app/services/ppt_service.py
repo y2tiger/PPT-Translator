@@ -33,8 +33,13 @@ def _reduce_margins(text_frame):
     Note: We do NOT use TEXT_TO_FIT_SHAPE as PowerPoint's auto-fit
     has minimum size limits that cause text truncation.
     Instead, we manually reduce font sizes.
+
+    IMPORTANT: Preserves original vertical anchor (alignment).
     """
     try:
+        # Preserve original vertical anchor before changing margins
+        original_anchor = text_frame.anchor
+
         # Reduce margins to give more space for text
         # Margins are in EMUs (914400 EMUs = 1 inch)
         # Setting to ~0.03 inch margins (minimal)
@@ -42,7 +47,12 @@ def _reduce_margins(text_frame):
         text_frame.margin_right = 27432
         text_frame.margin_top = 27432
         text_frame.margin_bottom = 27432
-        logger.debug("margins_reduced")
+
+        # Restore vertical anchor (middle, top, bottom alignment)
+        if original_anchor is not None:
+            text_frame.anchor = original_anchor
+
+        logger.debug("margins_reduced", anchor=str(original_anchor))
     except Exception as e:
         logger.debug("margin_reduction_failed", error=str(e))
 
