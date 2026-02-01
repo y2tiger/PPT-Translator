@@ -688,8 +688,11 @@ async def process_translation(
                             texts=visual_report.texts_with_formatting_issues[:5],  # Log first 5
                         )
 
-                    # Check if quality is good enough AND no formatting issues
-                    if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD and not has_formatting_issues:
+                    # Check if quality is good enough AND no formatting issues AND this is NOT the first iteration
+                    # Always run at least one full iteration to apply any improvements
+                    if (visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD
+                        and not has_formatting_issues
+                        and visual_iteration > 1):
                         logger.debug(
                             "visual_qa_passed",
                             file_id=file_id,
@@ -771,10 +774,36 @@ async def process_translation(
 
                         # Convert FormatAdjustment objects to dicts for apply_adjustments
                         # IMPORTANT: Use translated text (not original) to find text in PPT
+                        # Create reverse mapping: translated -> original
+                        reverse_translations = {v: k for k, v in all_translations.items()}
+
                         adjustments_to_apply = []
                         for adj in visual_report.format_adjustments:
-                            # Look up the translated text from the original
-                            translated_text = all_translations.get(adj.text, adj.text)
+                            adj_text = adj.text
+                            translated_text = None
+
+                            # Strategy 1: Direct lookup (adj.text is original)
+                            if adj_text in all_translations:
+                                translated_text = all_translations[adj_text]
+                            # Strategy 2: adj.text is already translated
+                            elif adj_text in reverse_translations:
+                                translated_text = adj_text  # Already translated
+                            # Strategy 3: Partial match in keys (original texts)
+                            else:
+                                for orig, trans in all_translations.items():
+                                    if adj_text in orig or orig in adj_text:
+                                        translated_text = trans
+                                        break
+                            # Strategy 4: Partial match in values (translated texts)
+                            if not translated_text:
+                                for orig, trans in all_translations.items():
+                                    if adj_text in trans or trans in adj_text:
+                                        translated_text = trans
+                                        break
+                            # Fallback: use as-is
+                            if not translated_text:
+                                translated_text = adj_text
+
                             adjustments_to_apply.append({
                                 "slide_number": adj.slide_number,
                                 "text": translated_text,  # Use translated text to find in PPT
@@ -784,14 +813,16 @@ async def process_translation(
                             })
                             logger.debug(
                                 "format_adjustment_mapped",
-                                original=adj.text[:30],
-                                translated=translated_text[:30],
+                                original=adj.text[:30] if adj.text else "",
+                                translated=translated_text[:30] if translated_text else "",
                                 type=adj.adjustment_type,
                                 target=adj.target_value,
                             )
 
                         # Apply adjustments to the translated PPT
-                        _, applied_count = ppt_service.apply_adjustments(
+                        # IMPORTANT: Load translated_for_qa since it contains the translated text
+                        translated_ppt_service = PPTService(str(translated_for_qa))
+                        _, applied_count = translated_ppt_service.apply_adjustments(
                             adjustments_to_apply, str(translated_for_qa)
                         )
 
