@@ -50,8 +50,130 @@ class FormatAdjustment:
     """Format adjustment to apply based on visual QA feedback."""
     slide_number: int
     text: str  # The text to adjust (original Korean text)
-    adjustment_type: str  # "alignment" or "font_size"
-    target_value: str  # For alignment: "top", "middle", "bottom"; For font_size: "increase", "decrease", or percentage like "80%"
+    adjustment_type: str  # Extended types: "alignment", "font_size", "word_wrap", "margin", "horizontal_align", "auto_fit", "retranslate"
+    target_value: str  # Varies by type - see below
+    priority: int = 1  # Execution priority (lower = higher priority)
+
+    # target_value by adjustment_type:
+    # - alignment: "top", "middle", "bottom"
+    # - font_size: "increase", "decrease", "80%", "12pt"
+    # - word_wrap: "enable", "disable"
+    # - margin: "reduce", "expand"
+    # - horizontal_align: "left", "center", "right"
+    # - auto_fit: "shrink_text", "resize_shape", "none"
+    # - retranslate: "shorter", "concise"
+
+
+def map_issue_to_adjustments(issue: VisualIssue) -> list[FormatAdjustment]:
+    """
+    Map a visual issue to one or more format adjustments.
+    This is the core Issue → Action mapping logic.
+    """
+    adjustments = []
+
+    if issue.issue_type == "overflow" or issue.issue_type == "text_overflow":
+        # Overflow: text is too big for container
+        # Action 1: Reduce font size (primary)
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="font_size",
+            target_value="decrease",
+            priority=1
+        ))
+        # Action 2: Disable word wrap (secondary) - prevents text box shrinking
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="word_wrap",
+            target_value="disable",
+            priority=2
+        ))
+
+    elif issue.issue_type == "truncation":
+        # Text is cut off - similar to overflow
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="font_size",
+            target_value="decrease",
+            priority=1
+        ))
+        # Also request shorter retranslation
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="retranslate",
+            target_value="shorter",
+            priority=3
+        ))
+
+    elif issue.issue_type == "layout":
+        # Layout issue - positioning, spacing problems
+        # Action 1: Reduce margins
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="margin",
+            target_value="reduce",
+            priority=1
+        ))
+        # Action 2: Disable word wrap
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="word_wrap",
+            target_value="disable",
+            priority=2
+        ))
+        # Action 3: Try auto_fit
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="auto_fit",
+            target_value="shrink_text",
+            priority=3
+        ))
+
+    elif issue.issue_type == "alignment":
+        # Alignment mismatch - parse target from suggestion
+        target = "middle"  # default
+        suggestion_lower = issue.suggestion.lower()
+        if "top" in suggestion_lower:
+            target = "top"
+        elif "bottom" in suggestion_lower:
+            target = "bottom"
+        elif "middle" in suggestion_lower or "center" in suggestion_lower:
+            target = "middle"
+
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="alignment",
+            target_value=target,
+            priority=1
+        ))
+
+    elif issue.issue_type == "font_size":
+        # Font size mismatch - parse direction from suggestion
+        target = "decrease"  # default to decrease (safer)
+        suggestion_lower = issue.suggestion.lower()
+        if "increase" in suggestion_lower or "larger" in suggestion_lower or "bigger" in suggestion_lower:
+            target = "increase"
+        elif "decrease" in suggestion_lower or "smaller" in suggestion_lower or "reduce" in suggestion_lower:
+            target = "decrease"
+
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="font_size",
+            target_value=target,
+            priority=1
+        ))
+
+    # Note: "untranslated" and "missing" are handled separately via texts_to_retranslate
+
+    return adjustments
 
 
 @dataclass
@@ -258,6 +380,14 @@ SUGGESTION CATEGORIES (choose the most relevant):
 - [SPECIAL_CHAR] Special characters: "특수문자/기호 포함 텍스트 처리 필요: '{{text}}'"
 - [ALIGNMENT] Alignment mismatch: "정렬 불일치: '{{text}}' - 원본은 {{original_align}}, 번역본은 {{current_align}}"
 
+FORMAT ADJUSTMENT TYPES (use in format_adjustments):
+- alignment: Vertical alignment ("top", "middle", "bottom")
+- font_size: Font size ("increase", "decrease")
+- word_wrap: Text wrapping ("disable" for labels that shrink, "enable" for paragraphs)
+- margin: Text box margins ("reduce" to give text more space)
+- auto_fit: Auto-fit text to shape ("shrink_text")
+- horizontal_align: Horizontal alignment ("left", "center", "right")
+
 Return as JSON:
 {{
   "quality_score": 85,
@@ -269,16 +399,16 @@ Return as JSON:
       "suggestion": "Force translate this text"
     }},
     {{
-      "type": "alignment",
-      "original_text": "헤드램프의 사용 재료",
-      "description": "Text alignment changed from middle to top",
-      "suggestion": "Change alignment to middle"
+      "type": "overflow",
+      "original_text": "텍스트가 너무 긴 경우",
+      "description": "Text extends beyond its container",
+      "suggestion": "Reduce font size or disable word wrap"
     }},
     {{
-      "type": "font_size",
-      "original_text": "광학 특성",
-      "description": "Text appears much smaller than original",
-      "suggestion": "Increase font size"
+      "type": "layout",
+      "original_text": "레이아웃 문제",
+      "description": "Text box appears cramped due to word wrapping",
+      "suggestion": "Disable word wrap and reduce margins"
     }}
   ],
   "algorithm_suggestions": [
@@ -294,7 +424,17 @@ Return as JSON:
     {{
       "text": "광학 특성",
       "adjustment_type": "font_size",
-      "target_value": "increase"
+      "target_value": "decrease"
+    }},
+    {{
+      "text": "짧은 라벨 텍스트",
+      "adjustment_type": "word_wrap",
+      "target_value": "disable"
+    }},
+    {{
+      "text": "공간이 필요한 텍스트",
+      "adjustment_type": "margin",
+      "target_value": "reduce"
     }}
   ]
 }}"""
@@ -580,6 +720,35 @@ Return as JSON:
                 i.original_text for i in all_issues
                 if i.issue_type in formatting_issue_types and i.original_text
             ]))
+
+            # === NEW: Auto-map issues to FormatAdjustments ===
+            # This ensures overflow, layout, truncation issues are converted to actionable adjustments
+            mapped_adjustments = []
+            for issue in all_issues:
+                if issue.original_text:  # Only process issues with text
+                    adjustments_from_issue = map_issue_to_adjustments(issue)
+                    mapped_adjustments.extend(adjustments_from_issue)
+
+            # Merge mapped adjustments with GPT-generated adjustments
+            # Use a set to deduplicate by (slide_number, text, adjustment_type)
+            seen_adjustments = set()
+            for adj in all_format_adjustments:
+                key = (adj.slide_number, adj.text, adj.adjustment_type)
+                seen_adjustments.add(key)
+
+            for adj in mapped_adjustments:
+                key = (adj.slide_number, adj.text, adj.adjustment_type)
+                if key not in seen_adjustments:
+                    all_format_adjustments.append(adj)
+                    seen_adjustments.add(key)
+
+            logger.warning(
+                "issue_to_adjustment_mapping_complete",
+                iteration=iteration,
+                total_issues=len(all_issues),
+                mapped_adjustments=len(mapped_adjustments),
+                final_adjustments=len(all_format_adjustments),
+            )
 
             # Deduplicate suggestions
             unique_suggestions = list(set(all_suggestions))

@@ -2,7 +2,7 @@ import structlog
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
 from pptx.util import Pt
-from pptx.enum.text import MSO_ANCHOR
+from pptx.enum.text import MSO_ANCHOR, PP_ALIGN, MSO_AUTO_SIZE
 from typing import Generator
 
 logger = structlog.get_logger(__name__)
@@ -563,8 +563,7 @@ class PPTService:
                 if para_text in translations:
                     max_translated_len = max(max_translated_len, len(translations[para_text]))
 
-            # Disable word wrap ONLY for very short original text (diagram labels)
-            # If original text was longer, it might intentionally wrap to multiple lines
+            # Disable word wrap for text boxes where wrapping would cause layout issues
             # Check the longest ORIGINAL text length
             max_original_len = 0
             for para_text in all_para_texts:
@@ -574,7 +573,10 @@ class PPTService:
             # Disable word wrap in these cases:
             # 1. Very short original (<=6 chars) with short translation (<=20 chars)
             # 2. Medium original (<=15 chars) with similar-length translation (ratio <= 1.3)
+            # 3. Translation is significantly longer (>1.5x) - prevents tiny font from wrapping
+            # 4. Short original (<=20 chars) - likely a label, not paragraph text
             # This prevents mid-word breaks like "REFLEKTO R", "OBUDO WA"
+            # and prevents tiny font issues like "SecuLetter Products" becoming unreadable
             should_disable_wrap = False
             if max_original_len > 0:
                 if max_original_len <= 6 and max_translated_len <= 20:
@@ -582,6 +584,12 @@ class PPTService:
                     should_disable_wrap = True
                 elif max_original_len <= 15 and max_translated_len <= max_original_len * 1.3:
                     # Medium labels with similar-length translation
+                    should_disable_wrap = True
+                elif max_original_len <= 20:
+                    # Short original text (likely labels) - disable wrap to prevent tiny font
+                    should_disable_wrap = True
+                elif max_translated_len > max_original_len * 1.5:
+                    # Translation is much longer - disable wrap to prevent excessive shrinking
                     should_disable_wrap = True
 
             if should_disable_wrap:
@@ -802,8 +810,13 @@ class PPTService:
         if not adjustments:
             return output_path, 0
 
-        # Separate alignment and font_size adjustments
+        # Categorize adjustments by type
         alignment_adjustments: list[dict] = []
+        word_wrap_adjustments: list[dict] = []
+        margin_adjustments: list[dict] = []
+        horizontal_align_adjustments: list[dict] = []
+        auto_fit_adjustments: list[dict] = []
+
         # Track font size adjustment counts per slide for compounding
         # slide_num -> {"decrease": count, "increase": count}
         font_size_counts_by_slide: dict[int, dict[str, int]] = {}
@@ -814,6 +827,14 @@ class PPTService:
 
             if adj_type == "alignment":
                 alignment_adjustments.append(adj)
+            elif adj_type == "word_wrap":
+                word_wrap_adjustments.append(adj)
+            elif adj_type == "margin":
+                margin_adjustments.append(adj)
+            elif adj_type == "horizontal_align":
+                horizontal_align_adjustments.append(adj)
+            elif adj_type == "auto_fit":
+                auto_fit_adjustments.append(adj)
             elif adj_type == "font_size":
                 # Count font size adjustments per slide for proper compounding
                 # Multiple "decrease" requests should compound (0.85^n)
@@ -829,18 +850,45 @@ class PPTService:
                 font_size_counts_by_slide[slide_num]["decrease"] += 1
             elif adj_type == "text_box":
                 # Text box width issues - also treat as font_size decrease for now
-                # (more aggressive than alignment)
                 if slide_num not in font_size_counts_by_slide:
                     font_size_counts_by_slide[slide_num] = {"decrease": 0, "increase": 0}
                 font_size_counts_by_slide[slide_num]["decrease"] += 1
 
-        # Group alignment adjustments by slide
+        # Group adjustments by slide
         alignments_by_slide: dict[int, list[dict]] = {}
         for adj in alignment_adjustments:
             slide_num = adj.get("slide_number", 0)
             if slide_num not in alignments_by_slide:
                 alignments_by_slide[slide_num] = []
             alignments_by_slide[slide_num].append(adj)
+
+        word_wrap_by_slide: dict[int, list[dict]] = {}
+        for adj in word_wrap_adjustments:
+            slide_num = adj.get("slide_number", 0)
+            if slide_num not in word_wrap_by_slide:
+                word_wrap_by_slide[slide_num] = []
+            word_wrap_by_slide[slide_num].append(adj)
+
+        margin_by_slide: dict[int, list[dict]] = {}
+        for adj in margin_adjustments:
+            slide_num = adj.get("slide_number", 0)
+            if slide_num not in margin_by_slide:
+                margin_by_slide[slide_num] = []
+            margin_by_slide[slide_num].append(adj)
+
+        horizontal_align_by_slide: dict[int, list[dict]] = {}
+        for adj in horizontal_align_adjustments:
+            slide_num = adj.get("slide_number", 0)
+            if slide_num not in horizontal_align_by_slide:
+                horizontal_align_by_slide[slide_num] = []
+            horizontal_align_by_slide[slide_num].append(adj)
+
+        auto_fit_by_slide: dict[int, list[dict]] = {}
+        for adj in auto_fit_adjustments:
+            slide_num = adj.get("slide_number", 0)
+            if slide_num not in auto_fit_by_slide:
+                auto_fit_by_slide[slide_num] = []
+            auto_fit_by_slide[slide_num].append(adj)
 
         applied_count = 0
 
@@ -852,6 +900,14 @@ class PPTService:
             "bottom": MSO_ANCHOR.BOTTOM,
         }
 
+        # Map horizontal alignment string to PP_ALIGN enum
+        horizontal_align_map = {
+            "left": PP_ALIGN.LEFT,
+            "center": PP_ALIGN.CENTER,
+            "right": PP_ALIGN.RIGHT,
+            "justify": PP_ALIGN.JUSTIFY,
+        }
+
         for slide_idx, slide in enumerate(self.presentation.slides, 1):
             # Apply alignment adjustments (individual text matching)
             if slide_idx in alignments_by_slide:
@@ -859,6 +915,38 @@ class PPTService:
                 for shape in slide.shapes:
                     applied_count += self._apply_alignment_to_shape(
                         shape, slide_alignments, alignment_map
+                    )
+
+            # Apply word_wrap adjustments
+            if slide_idx in word_wrap_by_slide:
+                slide_word_wraps = word_wrap_by_slide[slide_idx]
+                for shape in slide.shapes:
+                    applied_count += self._apply_word_wrap_to_shape(
+                        shape, slide_word_wraps
+                    )
+
+            # Apply margin adjustments
+            if slide_idx in margin_by_slide:
+                slide_margins = margin_by_slide[slide_idx]
+                for shape in slide.shapes:
+                    applied_count += self._apply_margin_to_shape(
+                        shape, slide_margins
+                    )
+
+            # Apply horizontal alignment adjustments
+            if slide_idx in horizontal_align_by_slide:
+                slide_h_aligns = horizontal_align_by_slide[slide_idx]
+                for shape in slide.shapes:
+                    applied_count += self._apply_horizontal_align_to_shape(
+                        shape, slide_h_aligns, horizontal_align_map
+                    )
+
+            # Apply auto_fit adjustments
+            if slide_idx in auto_fit_by_slide:
+                slide_auto_fits = auto_fit_by_slide[slide_idx]
+                for shape in slide.shapes:
+                    applied_count += self._apply_auto_fit_to_shape(
+                        shape, slide_auto_fits
                     )
 
             # Apply font size adjustments (per-slide with compounding)
@@ -1036,3 +1124,194 @@ class PPTService:
 
         return applied_count
 
+    def _apply_word_wrap_to_shape(
+        self,
+        shape,
+        adjustments: list[dict],
+        depth: int = 0
+    ) -> int:
+        """Apply word_wrap adjustments to a single shape and its children."""
+        applied_count = 0
+
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape) and depth < 10:
+            try:
+                for child_shape in shape.shapes:
+                    applied_count += self._apply_word_wrap_to_shape(
+                        child_shape, adjustments, depth + 1
+                    )
+            except Exception as e:
+                logger.debug("group_word_wrap_error", error=str(e))
+
+        # Handle text frames
+        if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
+            text_frame = shape.text_frame
+            shape_text = " ".join(p.text.strip() for p in text_frame.paragraphs if p.text.strip())
+
+            for adj in adjustments:
+                adj_text = adj.get("text", "")
+                target_value = adj.get("target_value", "disable")
+
+                if adj_text and adj_text in shape_text:
+                    try:
+                        if target_value == "disable":
+                            text_frame.word_wrap = False
+                        else:
+                            text_frame.word_wrap = True
+                        logger.info(
+                            "word_wrap_adjusted",
+                            text=adj_text[:30],
+                            word_wrap=target_value,
+                        )
+                        applied_count += 1
+                    except Exception as e:
+                        logger.debug("word_wrap_adjustment_error", text=adj_text[:30], error=str(e))
+
+        return applied_count
+
+    def _apply_margin_to_shape(
+        self,
+        shape,
+        adjustments: list[dict],
+        depth: int = 0
+    ) -> int:
+        """Apply margin adjustments to a single shape and its children."""
+        applied_count = 0
+
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape) and depth < 10:
+            try:
+                for child_shape in shape.shapes:
+                    applied_count += self._apply_margin_to_shape(
+                        child_shape, adjustments, depth + 1
+                    )
+            except Exception as e:
+                logger.debug("group_margin_error", error=str(e))
+
+        # Handle text frames
+        if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
+            text_frame = shape.text_frame
+            shape_text = " ".join(p.text.strip() for p in text_frame.paragraphs if p.text.strip())
+
+            for adj in adjustments:
+                adj_text = adj.get("text", "")
+                target_value = adj.get("target_value", "reduce")
+
+                if adj_text and adj_text in shape_text:
+                    try:
+                        if target_value == "reduce":
+                            # Reduce margins to minimum (27432 EMUs = ~0.03 inches)
+                            text_frame.margin_left = 27432
+                            text_frame.margin_right = 27432
+                            text_frame.margin_top = 27432
+                            text_frame.margin_bottom = 27432
+                        elif target_value == "expand":
+                            # Expand margins (91440 EMUs = ~0.1 inches)
+                            text_frame.margin_left = 91440
+                            text_frame.margin_right = 91440
+                            text_frame.margin_top = 91440
+                            text_frame.margin_bottom = 91440
+                        logger.info(
+                            "margin_adjusted",
+                            text=adj_text[:30],
+                            margin=target_value,
+                        )
+                        applied_count += 1
+                    except Exception as e:
+                        logger.debug("margin_adjustment_error", text=adj_text[:30], error=str(e))
+
+        return applied_count
+
+    def _apply_horizontal_align_to_shape(
+        self,
+        shape,
+        adjustments: list[dict],
+        alignment_map: dict,
+        depth: int = 0
+    ) -> int:
+        """Apply horizontal alignment adjustments to a single shape and its children."""
+        applied_count = 0
+
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape) and depth < 10:
+            try:
+                for child_shape in shape.shapes:
+                    applied_count += self._apply_horizontal_align_to_shape(
+                        child_shape, adjustments, alignment_map, depth + 1
+                    )
+            except Exception as e:
+                logger.debug("group_horizontal_align_error", error=str(e))
+
+        # Handle text frames
+        if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
+            text_frame = shape.text_frame
+            shape_text = " ".join(p.text.strip() for p in text_frame.paragraphs if p.text.strip())
+
+            for adj in adjustments:
+                adj_text = adj.get("text", "")
+                target_value = adj.get("target_value", "left")
+
+                if adj_text and adj_text in shape_text and target_value in alignment_map:
+                    try:
+                        for paragraph in text_frame.paragraphs:
+                            paragraph.alignment = alignment_map[target_value]
+                        logger.info(
+                            "horizontal_align_adjusted",
+                            text=adj_text[:30],
+                            alignment=target_value,
+                        )
+                        applied_count += 1
+                    except Exception as e:
+                        logger.debug("horizontal_align_adjustment_error", text=adj_text[:30], error=str(e))
+
+        return applied_count
+
+    def _apply_auto_fit_to_shape(
+        self,
+        shape,
+        adjustments: list[dict],
+        depth: int = 0
+    ) -> int:
+        """Apply auto_fit adjustments to a single shape and its children."""
+        applied_count = 0
+
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape) and depth < 10:
+            try:
+                for child_shape in shape.shapes:
+                    applied_count += self._apply_auto_fit_to_shape(
+                        child_shape, adjustments, depth + 1
+                    )
+            except Exception as e:
+                logger.debug("group_auto_fit_error", error=str(e))
+
+        # Handle text frames
+        if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
+            text_frame = shape.text_frame
+            shape_text = " ".join(p.text.strip() for p in text_frame.paragraphs if p.text.strip())
+
+            for adj in adjustments:
+                adj_text = adj.get("text", "")
+                target_value = adj.get("target_value", "shrink_text")
+
+                if adj_text and adj_text in shape_text:
+                    try:
+                        if target_value == "shrink_text":
+                            # Shrink text to fit the shape
+                            text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+                        elif target_value == "resize_shape":
+                            # Resize shape to fit text
+                            text_frame.auto_size = MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
+                        elif target_value == "none":
+                            # No auto-fit
+                            text_frame.auto_size = MSO_AUTO_SIZE.NONE
+                        logger.info(
+                            "auto_fit_adjusted",
+                            text=adj_text[:30],
+                            auto_fit=target_value,
+                        )
+                        applied_count += 1
+                    except Exception as e:
+                        logger.debug("auto_fit_adjustment_error", text=adj_text[:30], error=str(e))
+
+        return applied_count
