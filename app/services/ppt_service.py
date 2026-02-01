@@ -822,6 +822,17 @@ class PPTService:
                 direction = adj.get("target_value", "decrease")
                 if direction in ("decrease", "increase"):
                     font_size_counts_by_slide[slide_num][direction] += 1
+            elif adj_type == "overflow":
+                # Overflow means text is too big - treat as font_size decrease
+                if slide_num not in font_size_counts_by_slide:
+                    font_size_counts_by_slide[slide_num] = {"decrease": 0, "increase": 0}
+                font_size_counts_by_slide[slide_num]["decrease"] += 1
+            elif adj_type == "text_box":
+                # Text box width issues - also treat as font_size decrease for now
+                # (more aggressive than alignment)
+                if slide_num not in font_size_counts_by_slide:
+                    font_size_counts_by_slide[slide_num] = {"decrease": 0, "increase": 0}
+                font_size_counts_by_slide[slide_num]["decrease"] += 1
 
         # Group alignment adjustments by slide
         alignments_by_slide: dict[int, list[dict]] = {}
