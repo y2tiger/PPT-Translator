@@ -145,7 +145,7 @@ class VisualQAAgent:
 
             # Collect generated images
             images = sorted(output_dir.glob("slide-*.png"))
-            logger.info("pdf_batch_converted", first=first_page, last=last_page, count=len(images))
+            logger.debug("pdf_batch_converted", first=first_page, last=last_page, count=len(images))
             return images
         except Exception as e:
             logger.error("pdf_batch_conversion_failed", error=str(e))
@@ -182,7 +182,7 @@ class VisualQAAgent:
 
             # Collect generated images
             images = sorted(output_dir.glob("slide-*.png"))
-            logger.info("ppt_converted_to_images", count=len(images))
+            logger.debug("ppt_converted_to_images", count=len(images))
             return images
 
         except subprocess.TimeoutExpired:
@@ -358,7 +358,7 @@ Return as JSON:
                         adjustment_type=adj_data.get("adjustment_type", ""),
                         target_value=adj_data.get("target_value", "")
                     ))
-                    logger.info(
+                    logger.debug(
                         "format_adjustment_detected",
                         slide=slide_number,
                         text=adj_data.get("text", "")[:30],
@@ -456,7 +456,7 @@ Return as JSON:
 
             # Calculate total batches for progress reporting
             total_batches = (num_slides + batch_size - 1) // batch_size
-            logger.info("batch_processing_start", total_slides=num_slides, batch_size=batch_size, total_batches=total_batches)
+            logger.debug("batch_processing_start", total_slides=num_slides, batch_size=batch_size, total_batches=total_batches)
 
             # Create iteration directory for saving images if output_dir provided
             iter_dir = None
@@ -476,7 +476,7 @@ Return as JSON:
             for batch_start in range(1, num_slides + 1, batch_size):
                 current_batch += 1
                 batch_end = min(batch_start + batch_size - 1, num_slides)
-                logger.info("processing_batch", batch=current_batch, total_batches=total_batches, batch_start=batch_start, batch_end=batch_end)
+                logger.debug("processing_batch", batch=current_batch, total_batches=total_batches, batch_start=batch_start, batch_end=batch_end)
 
                 # Call progress callback if provided
                 if progress_callback:
@@ -506,7 +506,7 @@ Return as JSON:
                 # Compare slides in this batch
                 for i, (orig_img, trans_img) in enumerate(zip(original_images, translated_images)):
                     slide_num = batch_start + i
-                    logger.info("comparing_slide", slide=slide_num, total=num_slides)
+                    logger.debug("comparing_slide", slide=slide_num, total=num_slides)
 
                     comparison = await self._compare_slides_vision(
                         orig_img,
@@ -552,7 +552,7 @@ Return as JSON:
                 shutil.rmtree(batch_orig_dir, ignore_errors=True)
                 shutil.rmtree(batch_trans_dir, ignore_errors=True)
                 gc.collect()
-                logger.info("batch_cleanup_complete", batch_start=batch_start)
+                logger.debug("batch_cleanup_complete", batch_start=batch_start)
 
             # Clean up PDFs
             original_pdf.unlink(missing_ok=True)

@@ -36,8 +36,9 @@ MAX_QA_ITERATIONS = 3
 MAX_VISUAL_ITERATIONS = 2  # Visual comparison iterations
 VISUAL_QA_QUALITY_THRESHOLD = 95  # Score threshold to pass (raised from 85)
 
-# Set logging level to INFO to see font processing logs
-logging.basicConfig(level=logging.INFO)
+# Set logging level from environment variable (default: WARNING for production)
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARNING").upper()
+logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.WARNING))
 
 # Configure structured logging
 structlog.configure(
@@ -373,7 +374,7 @@ async def process_translation(
             # Merge translations
             all_translations.update(slide_translations)
 
-            logger.info(
+            logger.debug(
                 "slide_translated",
                 file_id=file_id,
                 slide_number=slide_num,
@@ -403,7 +404,7 @@ async def process_translation(
                 target_lang=target_lang,
             )
 
-            logger.info(
+            logger.debug(
                 "diagnostic_iteration_complete",
                 file_id=file_id,
                 iteration=qa_iteration,
@@ -418,7 +419,7 @@ async def process_translation(
                               if i.severity in (IssueSeverity.CRITICAL, IssueSeverity.WARNING)]
 
             if not critical_issues:
-                logger.info("diagnostic_passed", file_id=file_id, iteration=qa_iteration)
+                logger.debug("diagnostic_passed", file_id=file_id, iteration=qa_iteration)
                 break
 
             # Get targeted fixes for issues
@@ -440,7 +441,7 @@ async def process_translation(
             # Apply fixes to translations
             if fixes:
                 all_translations.update(fixes)
-                logger.info(
+                logger.debug(
                     "diagnostic_fixes_applied",
                     file_id=file_id,
                     iteration=qa_iteration,
@@ -462,7 +463,7 @@ async def process_translation(
         last_format_adjustments = []  # Store adjustments from last iteration for final application
 
         if visual_qa_iterations <= 0:
-            logger.info("visual_qa_disabled", file_id=file_id)
+            logger.debug("visual_qa_disabled", file_id=file_id)
         else:
             visual_qa_agent = VisualQAAgent(api_key)
             max_iterations = min(visual_qa_iterations, 3)  # Cap at 3
@@ -481,7 +482,7 @@ async def process_translation(
             # Log source file content BEFORE backup
             source_hash = hashlib.md5(file_path.read_bytes()).hexdigest()[:8]
             source_texts = ppt_service.get_all_texts()[:5]  # First 5 texts for verification
-            logger.info(
+            logger.debug(
                 "backup_source_verification",
                 file_id=file_id,
                 source_path=str(file_path),
@@ -495,7 +496,7 @@ async def process_translation(
             backup_hash = hashlib.md5(original_backup_path.read_bytes()).hexdigest()[:8]
             backup_service = PPTService(str(original_backup_path))
             backup_texts = backup_service.get_all_texts()[:5]
-            logger.info(
+            logger.debug(
                 "original_backup_created",
                 file_id=file_id,
                 backup_path=str(original_backup_path),
@@ -541,7 +542,7 @@ async def process_translation(
                 backup_verify_service = PPTService(str(original_backup_path))
                 backup_verify_texts = backup_verify_service.get_all_texts()[:3]
 
-                logger.info(
+                logger.debug(
                     "visual_qa_paths",
                     file_id=file_id,
                     iteration=visual_iteration,
@@ -622,7 +623,7 @@ async def process_translation(
                         ))
                         break  # Exit loop - can't do visual QA without LibreOffice
 
-                    logger.info(
+                    logger.debug(
                         "visual_qa_iteration",
                         file_id=file_id,
                         iteration=visual_iteration,
@@ -679,7 +680,7 @@ async def process_translation(
                     best_score = max(best_score, visual_report.overall_score)
 
                     if has_formatting_issues:
-                        logger.info(
+                        logger.debug(
                             "formatting_issues_detected",
                             file_id=file_id,
                             iteration=visual_iteration,
@@ -689,7 +690,7 @@ async def process_translation(
 
                     # Check if quality is good enough AND no formatting issues
                     if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD and not has_formatting_issues:
-                        logger.info(
+                        logger.debug(
                             "visual_qa_passed",
                             file_id=file_id,
                             iteration=visual_iteration,
@@ -699,7 +700,7 @@ async def process_translation(
 
                     # If score is good but has formatting issues, log and continue to apply fixes
                     if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD and has_formatting_issues:
-                        logger.info(
+                        logger.debug(
                             "visual_qa_continuing_for_formatting",
                             file_id=file_id,
                             iteration=visual_iteration,
@@ -722,7 +723,7 @@ async def process_translation(
                         # Log filtering results
                         filtered_out = len(visual_report.texts_to_retranslate) - len(valid_texts_to_retranslate)
                         if filtered_out > 0:
-                            logger.info(
+                            logger.debug(
                                 "retranslation_filtered",
                                 file_id=file_id,
                                 original_count=len(visual_report.texts_to_retranslate),
@@ -750,7 +751,7 @@ async def process_translation(
                             if retranslations:
                                 all_translations.update(retranslations)
                                 has_work_to_do = True
-                                logger.info(
+                                logger.debug(
                                     "visual_retranslations_applied",
                                     file_id=file_id,
                                     iteration=visual_iteration,
@@ -781,7 +782,7 @@ async def process_translation(
                                 "adjustment_type": adj.adjustment_type,
                                 "target_value": adj.target_value,
                             })
-                            logger.info(
+                            logger.debug(
                                 "format_adjustment_mapped",
                                 original=adj.text[:30],
                                 translated=translated_text[:30],
@@ -799,7 +800,7 @@ async def process_translation(
 
                         if applied_count > 0:
                             has_work_to_do = True
-                            logger.info(
+                            logger.debug(
                                 "format_adjustments_applied",
                                 file_id=file_id,
                                 iteration=visual_iteration,
@@ -827,7 +828,7 @@ async def process_translation(
 
                     if not has_work_to_do and (is_last_iteration or not score_below_threshold):
                         # No improvements possible and either last iteration or score is good enough
-                        logger.info(
+                        logger.debug(
                             "visual_qa_iteration_complete",
                             file_id=file_id,
                             iteration=visual_iteration,
@@ -838,7 +839,7 @@ async def process_translation(
                         break
                     elif not has_work_to_do and score_below_threshold and not is_last_iteration:
                         # No specific improvements but score is still low - continue to next iteration
-                        logger.info(
+                        logger.debug(
                             "continuing_despite_no_work",
                             file_id=file_id,
                             iteration=visual_iteration,
@@ -862,7 +863,7 @@ async def process_translation(
 
             # Free memory after Visual QA loop
             gc.collect()
-            logger.info("memory_freed_after_visual_qa", file_id=file_id)
+            logger.debug("memory_freed_after_visual_qa", file_id=file_id)
 
         # Free memory after Visual QA loop (or if skipped)
         gc.collect()
@@ -885,13 +886,13 @@ async def process_translation(
         # Apply target font if specified
         if target_font:
             apply_font_to_ppt(str(output_path), str(output_path), target_font)
-            logger.info("font_applied", file_id=file_id, font=target_font)
+            logger.debug("font_applied", file_id=file_id, font=target_font)
 
         # Apply format adjustments from Visual QA to final output
         if last_format_adjustments:
             final_ppt_service = PPTService(str(output_path))
             _, adj_applied = final_ppt_service.apply_adjustments(last_format_adjustments, str(output_path))
-            logger.info(
+            logger.debug(
                 "final_format_adjustments_applied",
                 file_id=file_id,
                 requested=len(last_format_adjustments),
@@ -900,7 +901,7 @@ async def process_translation(
 
         # Log final summary
         applied_count = sum(1 for v in applied_tracker.values() if v)
-        logger.info(
+        logger.debug(
             "final_application_summary",
             file_id=file_id,
             total_translations=len(all_translations),
