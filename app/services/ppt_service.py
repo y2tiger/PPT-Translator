@@ -510,11 +510,20 @@ class PPTService:
                 if para_text in translations:
                     max_original_len = max(max_original_len, len(para_text))
 
-            # Only disable wrap if:
-            # 1. Original Korean is very short (<=6 chars = likely single-line label like "광학", "하우징")
-            # 2. Translated text is also reasonably short (<=20 chars)
-            # This preserves intentional multi-line layouts
-            if max_original_len > 0 and max_original_len <= 6 and max_translated_len <= 20:
+            # Disable word wrap in these cases:
+            # 1. Very short original (<=6 chars) with short translation (<=20 chars)
+            # 2. Medium original (<=15 chars) with similar-length translation (ratio <= 1.3)
+            # This prevents mid-word breaks like "REFLEKTO R", "OBUDO WA"
+            should_disable_wrap = False
+            if max_original_len > 0:
+                if max_original_len <= 6 and max_translated_len <= 20:
+                    # Very short labels always disable wrap
+                    should_disable_wrap = True
+                elif max_original_len <= 15 and max_translated_len <= max_original_len * 1.3:
+                    # Medium labels with similar-length translation
+                    should_disable_wrap = True
+
+            if should_disable_wrap:
                 _disable_word_wrap(shape.text_frame)
                 logger.info(
                     "word_wrap_disabled_short_label",
