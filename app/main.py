@@ -460,7 +460,7 @@ async def process_translation(
         # Visual QA Loop - Compare images and iteratively improve (optional)
         qa_history[file_id] = []
         best_score = 0  # Initialize outside to avoid NameError when visual_qa_iterations <= 0
-        last_format_adjustments = []  # Store adjustments from last iteration for final application
+        all_format_adjustments = []  # Accumulate adjustments across all iterations
 
         if visual_qa_iterations <= 0:
             logger.debug("visual_qa_disabled", file_id=file_id)
@@ -533,6 +533,11 @@ async def process_translation(
                     apply_font_to_ppt(str(translated_for_qa), str(translated_for_qa), target_font)
                 else:
                     shutil.copy(output_path, translated_for_qa)
+
+                # Apply accumulated adjustments from previous iterations
+                if all_format_adjustments:
+                    adj_ppt_service = PPTService(str(translated_for_qa))
+                    adj_ppt_service.apply_adjustments(all_format_adjustments, str(translated_for_qa))
 
                 # Log paths being used for Visual QA comparison
                 backup_hash = hashlib.md5(original_backup_path.read_bytes()).hexdigest()[:8] if original_backup_path.exists() else "none"
@@ -688,29 +693,6 @@ async def process_translation(
                             texts=visual_report.texts_with_formatting_issues[:5],  # Log first 5
                         )
 
-                    # Check if quality is good enough AND no formatting issues AND this is NOT the first iteration
-                    # Always run at least one full iteration to apply any improvements
-                    if (visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD
-                        and not has_formatting_issues
-                        and visual_iteration > 1):
-                        logger.debug(
-                            "visual_qa_passed",
-                            file_id=file_id,
-                            iteration=visual_iteration,
-                            score=visual_report.overall_score,
-                        )
-                        break
-
-                    # If score is good but has formatting issues, log and continue to apply fixes
-                    if visual_report.overall_score >= VISUAL_QA_QUALITY_THRESHOLD and has_formatting_issues:
-                        logger.debug(
-                            "visual_qa_continuing_for_formatting",
-                            file_id=file_id,
-                            iteration=visual_iteration,
-                            score=visual_report.overall_score,
-                            formatting_issues=formatting_issues_count,
-                        )
-
                     # Get retranslations for problematic texts
                     has_work_to_do = False
 
@@ -826,8 +808,8 @@ async def process_translation(
                             adjustments_to_apply, str(translated_for_qa)
                         )
 
-                        # Store adjustments for final application (important for 1-iteration case)
-                        last_format_adjustments = adjustments_to_apply
+                        # Accumulate adjustments for re-application after each translation
+                        all_format_adjustments.extend(adjustments_to_apply)
 
                         if applied_count > 0:
                             has_work_to_do = True
@@ -852,31 +834,8 @@ async def process_translation(
                             message=f"시각적 품질 검증 {visual_iteration}회차: {formatting_issues_count}개 포맷 이슈 재처리 중...",
                         )
 
-                    # Decide whether to continue iterating
-                    # Continue if: we have work to do OR (score is below threshold AND not last iteration)
-                    is_last_iteration = (visual_iteration >= max_iterations)
-                    score_below_threshold = (visual_report.overall_score < VISUAL_QA_QUALITY_THRESHOLD)
-
-                    if not has_work_to_do and (is_last_iteration or not score_below_threshold):
-                        # No improvements possible and either last iteration or score is good enough
-                        logger.debug(
-                            "visual_qa_iteration_complete",
-                            file_id=file_id,
-                            iteration=visual_iteration,
-                            score=visual_report.overall_score,
-                            threshold=VISUAL_QA_QUALITY_THRESHOLD,
-                            is_last=is_last_iteration,
-                        )
-                        break
-                    elif not has_work_to_do and score_below_threshold and not is_last_iteration:
-                        # No specific improvements but score is still low - continue to next iteration
-                        logger.debug(
-                            "continuing_despite_no_work",
-                            file_id=file_id,
-                            iteration=visual_iteration,
-                            score=visual_report.overall_score,
-                            reason="score below threshold, user requested more iterations",
-                        )
+                    # Save iteration result to output_path (so next iteration builds on this)
+                    shutil.copy(translated_for_qa, output_path)
 
                 except Exception as visual_error:
                     logger.warning(
@@ -898,46 +857,32 @@ async def process_translation(
 
         # Free memory after Visual QA loop (or if skipped)
         gc.collect()
-        logger.info("memory_freed_after_visual_qa", file_id=file_id)
 
-        # Final application
-        translation_status[file_id] = TranslationStatus(
-            status="processing",
-            progress=95,
-            total_slides=total_slides,
-            current_slide=total_slides,
-            review_loop=0,
-            message="최종 번역 결과 적용 중...",
-        )
-
-        # Apply final translations
-        ppt_service = PPTService(str(file_path))
-        _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
-
-        # Apply target font if specified
-        if target_font:
-            apply_font_to_ppt(str(output_path), str(output_path), target_font)
-            logger.debug("font_applied", file_id=file_id, font=target_font)
-
-        # Apply format adjustments from Visual QA to final output
-        if last_format_adjustments:
-            final_ppt_service = PPTService(str(output_path))
-            _, adj_applied = final_ppt_service.apply_adjustments(last_format_adjustments, str(output_path))
-            logger.debug(
-                "final_format_adjustments_applied",
-                file_id=file_id,
-                requested=len(last_format_adjustments),
-                applied=adj_applied,
+        # Final application only needed if Visual QA was skipped (0 iterations)
+        if visual_qa_iterations <= 0:
+            translation_status[file_id] = TranslationStatus(
+                status="processing",
+                progress=95,
+                total_slides=total_slides,
+                current_slide=total_slides,
+                review_loop=0,
+                message="최종 번역 결과 적용 중...",
             )
 
+            # Apply translations
+            ppt_service = PPTService(str(file_path))
+            ppt_service.apply_translations(all_translations, str(output_path))
+
+            # Apply target font if specified
+            if target_font:
+                apply_font_to_ppt(str(output_path), str(output_path), target_font)
+
         # Log final summary
-        applied_count = sum(1 for v in applied_tracker.values() if v)
         logger.debug(
             "final_application_summary",
             file_id=file_id,
             total_translations=len(all_translations),
-            applied=applied_count,
-            failed=len(applied_tracker) - applied_count,
+            total_adjustments=len(all_format_adjustments),
             visual_score=best_score,
         )
 
