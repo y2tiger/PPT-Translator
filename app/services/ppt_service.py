@@ -563,8 +563,7 @@ class PPTService:
                 if para_text in translations:
                     max_translated_len = max(max_translated_len, len(translations[para_text]))
 
-            # Disable word wrap ONLY for very short original text (diagram labels)
-            # If original text was longer, it might intentionally wrap to multiple lines
+            # Disable word wrap for text boxes where wrapping would cause layout issues
             # Check the longest ORIGINAL text length
             max_original_len = 0
             for para_text in all_para_texts:
@@ -574,7 +573,10 @@ class PPTService:
             # Disable word wrap in these cases:
             # 1. Very short original (<=6 chars) with short translation (<=20 chars)
             # 2. Medium original (<=15 chars) with similar-length translation (ratio <= 1.3)
+            # 3. Translation is significantly longer (>1.5x) - prevents tiny font from wrapping
+            # 4. Short original (<=20 chars) - likely a label, not paragraph text
             # This prevents mid-word breaks like "REFLEKTO R", "OBUDO WA"
+            # and prevents tiny font issues like "SecuLetter Products" becoming unreadable
             should_disable_wrap = False
             if max_original_len > 0:
                 if max_original_len <= 6 and max_translated_len <= 20:
@@ -582,6 +584,12 @@ class PPTService:
                     should_disable_wrap = True
                 elif max_original_len <= 15 and max_translated_len <= max_original_len * 1.3:
                     # Medium labels with similar-length translation
+                    should_disable_wrap = True
+                elif max_original_len <= 20:
+                    # Short original text (likely labels) - disable wrap to prevent tiny font
+                    should_disable_wrap = True
+                elif max_translated_len > max_original_len * 1.5:
+                    # Translation is much longer - disable wrap to prevent excessive shrinking
                     should_disable_wrap = True
 
             if should_disable_wrap:
