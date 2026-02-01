@@ -474,13 +474,35 @@ async def process_translation(
             # This ensures we have an unmodified original for Visual QA comparison
             # ALWAYS overwrite to ensure fresh backup (in case of retry with same file_id)
             import shutil
+            import hashlib
             original_backup_path = UPLOAD_DIR / f"{file_id}_original_backup.pptx"
+
+            # Log source file content BEFORE backup
+            source_hash = hashlib.md5(file_path.read_bytes()).hexdigest()[:8]
+            source_texts = ppt_service.get_all_texts()[:5]  # First 5 texts for verification
+            logger.info(
+                "backup_source_verification",
+                file_id=file_id,
+                source_path=str(file_path),
+                source_hash=source_hash,
+                sample_texts=source_texts,
+            )
+
             shutil.copy(file_path, original_backup_path)
+
+            # Verify backup content matches source
+            backup_hash = hashlib.md5(original_backup_path.read_bytes()).hexdigest()[:8]
+            backup_service = PPTService(str(original_backup_path))
+            backup_texts = backup_service.get_all_texts()[:5]
             logger.info(
                 "original_backup_created",
                 file_id=file_id,
                 backup_path=str(original_backup_path),
                 source_path=str(file_path),
+                source_hash=source_hash,
+                backup_hash=backup_hash,
+                hashes_match=(source_hash == backup_hash),
+                backup_sample_texts=backup_texts,
             )
 
             for visual_iteration in range(1, max_iterations + 1):
@@ -499,9 +521,13 @@ async def process_translation(
                 _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
 
                 # Log paths being used for Visual QA comparison
-                import hashlib
                 backup_hash = hashlib.md5(original_backup_path.read_bytes()).hexdigest()[:8] if original_backup_path.exists() else "none"
                 trans_hash = hashlib.md5(output_path.read_bytes()).hexdigest()[:8] if output_path.exists() else "none"
+
+                # Verify backup still contains original content (not translated)
+                backup_verify_service = PPTService(str(original_backup_path))
+                backup_verify_texts = backup_verify_service.get_all_texts()[:3]
+
                 logger.info(
                     "visual_qa_paths",
                     file_id=file_id,
@@ -513,6 +539,7 @@ async def process_translation(
                     backup_hash=backup_hash,
                     translated_hash=trans_hash,
                     files_are_same=(backup_hash == trans_hash),
+                    backup_sample_texts=backup_verify_texts,
                 )
 
                 # Note: Font is applied AFTER all Visual QA iterations for fair comparison
