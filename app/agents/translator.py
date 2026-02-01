@@ -255,6 +255,7 @@ Now translate:"""
 
             # Build result mapping
             result_mapping = dict(skipped_texts)  # Start with skipped texts
+            missing_texts = []  # Track texts missing from batch response
 
             for i, text in enumerate(texts_to_translate):
                 key = str(i + 1)
@@ -268,7 +269,30 @@ Now translate:"""
                     else:
                         result_mapping[text] = translated
                 else:
-                    result_mapping[text] = text  # Keep original if not found
+                    # Track missing texts for individual fallback
+                    missing_texts.append(text)
+                    logger.warning(
+                        "batch_translation_missing",
+                        slide_number=slide_number,
+                        missing_key=key,
+                        text_preview=text[:50],
+                    )
+
+            # Fallback: translate missing texts individually
+            if missing_texts:
+                logger.info(
+                    "batch_fallback_started",
+                    slide_number=slide_number,
+                    missing_count=len(missing_texts),
+                )
+                for text in missing_texts:
+                    individual_result = await self.translate(text, source_lang, target_lang)
+                    result_mapping[text] = individual_result
+                    logger.info(
+                        "batch_fallback_completed",
+                        original=text[:30],
+                        translated=individual_result[:30],
+                    )
 
             logger.info(
                 "slide_batch_translation_completed",
