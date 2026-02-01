@@ -505,6 +505,23 @@ async def process_translation(
                 backup_sample_texts=backup_texts,
             )
 
+            # Create font-normalized versions for Visual QA comparison
+            # This ensures LibreOffice renders both files consistently (no font substitution issues)
+            original_for_qa = UPLOAD_DIR / f"{file_id}_original_for_qa.pptx"
+            translated_for_qa = UPLOAD_DIR / f"{file_id}_translated_for_qa.pptx"
+
+            # Apply target font to original backup for fair comparison
+            if target_font:
+                shutil.copy(original_backup_path, original_for_qa)
+                apply_font_to_ppt(str(original_for_qa), str(original_for_qa), target_font)
+                logger.info(
+                    "original_font_normalized_for_qa",
+                    file_id=file_id,
+                    target_font=target_font,
+                )
+            else:
+                shutil.copy(original_backup_path, original_for_qa)
+
             for visual_iteration in range(1, max_iterations + 1):
                 # Apply current translations
                 translation_status[file_id] = TranslationStatus(
@@ -520,9 +537,16 @@ async def process_translation(
                 ppt_service = PPTService(str(file_path))
                 _, applied_tracker = ppt_service.apply_translations(all_translations, str(output_path))
 
+                # Apply target font to translated output for fair comparison
+                if target_font:
+                    shutil.copy(output_path, translated_for_qa)
+                    apply_font_to_ppt(str(translated_for_qa), str(translated_for_qa), target_font)
+                else:
+                    shutil.copy(output_path, translated_for_qa)
+
                 # Log paths being used for Visual QA comparison
-                backup_hash = hashlib.md5(original_backup_path.read_bytes()).hexdigest()[:8] if original_backup_path.exists() else "none"
-                trans_hash = hashlib.md5(output_path.read_bytes()).hexdigest()[:8] if output_path.exists() else "none"
+                backup_hash = hashlib.md5(original_for_qa.read_bytes()).hexdigest()[:8] if original_for_qa.exists() else "none"
+                trans_hash = hashlib.md5(translated_for_qa.read_bytes()).hexdigest()[:8] if translated_for_qa.exists() else "none"
 
                 # Verify backup still contains original content (not translated)
                 backup_verify_service = PPTService(str(original_backup_path))
@@ -532,10 +556,10 @@ async def process_translation(
                     "visual_qa_paths",
                     file_id=file_id,
                     iteration=visual_iteration,
-                    original_backup_path=str(original_backup_path),
-                    translated_path=str(output_path),
-                    backup_exists=original_backup_path.exists(),
-                    translated_exists=output_path.exists(),
+                    original_for_qa=str(original_for_qa),
+                    translated_for_qa=str(translated_for_qa),
+                    backup_exists=original_for_qa.exists(),
+                    translated_exists=translated_for_qa.exists(),
                     backup_hash=backup_hash,
                     translated_hash=trans_hash,
                     files_are_same=(backup_hash == trans_hash),
@@ -567,10 +591,10 @@ async def process_translation(
                     )
 
                 try:
-                    # Use the backup copy for comparison to ensure original Korean is preserved
+                    # Use font-normalized copies for fair comparison (consistent font rendering)
                     visual_report = await visual_qa_agent.compare_presentations(
-                        original_ppt_path=str(original_backup_path),
-                        translated_ppt_path=str(output_path),
+                        original_ppt_path=str(original_for_qa),
+                        translated_ppt_path=str(translated_for_qa),
                         source_lang=source_lang,
                         target_lang=target_lang,
                         max_slides=total_slides,  # Process all slides with batch processing
@@ -742,6 +766,12 @@ async def process_translation(
                     )
                     # Continue without visual QA if it fails (e.g., LibreOffice not installed)
                     break
+
+            # Cleanup temporary QA files
+            if original_for_qa.exists():
+                original_for_qa.unlink()
+            if translated_for_qa.exists():
+                translated_for_qa.unlink()
 
             # Free memory after Visual QA loop
             gc.collect()
@@ -971,6 +1001,8 @@ async def delete_file(file_id: str):
     file_path = UPLOAD_DIR / f"{file_id}.pptx"
     output_path = UPLOAD_DIR / f"{file_id}_translated.pptx"
     original_backup_path = UPLOAD_DIR / f"{file_id}_original_backup.pptx"
+    original_for_qa = UPLOAD_DIR / f"{file_id}_original_for_qa.pptx"
+    translated_for_qa = UPLOAD_DIR / f"{file_id}_translated_for_qa.pptx"
     qa_dir = UPLOAD_DIR / f"{file_id}_qa"
 
     if file_path.exists():
@@ -979,6 +1011,10 @@ async def delete_file(file_id: str):
         output_path.unlink()
     if original_backup_path.exists():
         original_backup_path.unlink()
+    if original_for_qa.exists():
+        original_for_qa.unlink()
+    if translated_for_qa.exists():
+        translated_for_qa.unlink()
     if qa_dir.exists():
         import shutil
         shutil.rmtree(qa_dir)
