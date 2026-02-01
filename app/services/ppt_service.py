@@ -395,16 +395,14 @@ class PPTService:
                     elif original_pt:
                         calculated_pt = original_pt
                     else:
-                        # Default based on text length
-                        if len(translated) <= 8:
-                            calculated_pt = 6.0
-                        elif len(translated) <= 12:
-                            calculated_pt = 7.0
-                        elif len(translated) <= 20:
-                            calculated_pt = 8.0
-                        else:
-                            calculated_pt = 9.0
-                        original_pt = calculated_pt  # Treat default as original
+                        # Cannot read original font size - skip font adjustment
+                        # This preserves the original font size in the PPT
+                        logger.debug(
+                            "font_size_unknown_skipping",
+                            para_text=para_text[:30],
+                            translated=translated[:30],
+                        )
+                        continue  # Don't add to requirements, keep original size
 
                     requirements.append({
                         "slide_idx": slide_idx,
@@ -439,8 +437,8 @@ class PPTService:
                                 elif original_pt:
                                     calculated_pt = original_pt
                                 else:
-                                    calculated_pt = 8.0 if len(translated) <= 15 else 9.0
-                                    original_pt = calculated_pt
+                                    # Cannot read original font size - skip font adjustment
+                                    continue
 
                                 requirements.append({
                                     "slide_idx": slide_idx,
