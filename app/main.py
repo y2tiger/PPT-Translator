@@ -768,15 +768,25 @@ async def process_translation(
                         )
 
                         # Convert FormatAdjustment objects to dicts for apply_adjustments
-                        adjustments_to_apply = [
-                            {
+                        # IMPORTANT: Use translated text (not original) to find text in PPT
+                        adjustments_to_apply = []
+                        for adj in visual_report.format_adjustments:
+                            # Look up the translated text from the original
+                            translated_text = all_translations.get(adj.text, adj.text)
+                            adjustments_to_apply.append({
                                 "slide_number": adj.slide_number,
-                                "text": adj.text,
+                                "text": translated_text,  # Use translated text to find in PPT
+                                "original_text": adj.text,  # Keep original for logging
                                 "adjustment_type": adj.adjustment_type,
                                 "target_value": adj.target_value,
-                            }
-                            for adj in visual_report.format_adjustments
-                        ]
+                            })
+                            logger.info(
+                                "format_adjustment_mapped",
+                                original=adj.text[:30],
+                                translated=translated_text[:30],
+                                type=adj.adjustment_type,
+                                target=adj.target_value,
+                            )
 
                         # Apply adjustments to the translated PPT
                         _, applied_count = ppt_service.apply_adjustments(
