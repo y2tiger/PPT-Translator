@@ -169,7 +169,7 @@ Output: "Jakość produktu" """
         source_name = LANGUAGE_NAMES[source_lang]
         target_name = LANGUAGE_NAMES[target_lang]
 
-        logger.info(
+        logger.warning(
             "slide_batch_translation_started",
             slide_number=slide_number,
             text_count=len(texts_to_translate),
@@ -191,14 +191,18 @@ Output: "Jakość produktu" """
 - Maintain the formal, professional tone
 - If unsure, prefer the more literal translation"""
         else:  # MARKETING
-            style_instructions = """TRANSLATION STYLE: MARKETING (마케팅 문서)
-- Prioritize IMPACT and NATURALNESS over literal accuracy
-- Adapt the message to feel native in the target language
-- Use culturally appropriate expressions and idioms
-- Make the text persuasive and engaging
-- Capture the FEELING and EMOTION of the original
-- Localize metaphors and cultural references
-- Use dynamic, compelling language that resonates with the target audience"""
+            style_instructions = """TRANSLATION STYLE: MARKETING (마케팅/세일즈 문서)
+- DO NOT translate literally! Rewrite the message to be compelling in the target language
+- Think like a copywriter: What would a native speaker write to convey the same message?
+- Use POWERFUL action verbs and dynamic language
+- Create IMPACT: "솔루션을 제공합니다" → "Deliver breakthrough solutions" NOT "Provide solutions"
+- Be BOLD and CONFIDENT: "검토합니다" → "Evaluate and decide" NOT "Review"
+- Use marketing buzzwords appropriate for the target culture
+- Make benefits POP: Focus on what the audience gains
+- Keep it PUNCHY and MEMORABLE - avoid weak, passive phrasing
+- Example: "새로운 시장 진출" → "Conquer new markets" or "Break into new markets" NOT "Enter new markets"
+- Example: "전략적 협력" → "Strategic Alliance" or "Power Partnership" NOT just "Strategic cooperation"
+- The goal is PERSUASION, not just information transfer"""
 
         system_prompt = f"""You are a professional translator. Translate the following texts from {source_name} to {target_name}.
 
