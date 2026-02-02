@@ -745,27 +745,31 @@ footer {
 }
 
 .issue.critical {
-    background: #ef444420;
+    background: #ef444430;
     border-left: 3px solid #ef4444;
 }
 
 .issue.warning {
-    background: #f59e0b20;
+    background: #f59e0b30;
     border-left: 3px solid #f59e0b;
 }
 
 .issue-type {
     font-weight: 600;
     white-space: nowrap;
+    color: var(--text-primary);
 }
 
 .issue-text {
-    color: var(--text-secondary);
+    color: var(--text-primary);
     font-family: monospace;
+    font-weight: 500;
 }
 
 .issue-desc {
     flex: 1;
+    color: var(--text-primary);
+    opacity: 0.9;
 }
 
 .quality-score {

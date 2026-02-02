@@ -816,10 +816,7 @@ class PPTService:
         margin_adjustments: list[dict] = []
         horizontal_align_adjustments: list[dict] = []
         auto_fit_adjustments: list[dict] = []
-
-        # Track font size adjustment counts per slide for compounding
-        # slide_num -> {"decrease": count, "increase": count}
-        font_size_counts_by_slide: dict[int, dict[str, int]] = {}
+        font_size_adjustments: list[dict] = []  # Individual text box adjustments
 
         for adj in adjustments:
             adj_type = adj.get("adjustment_type", "")
@@ -836,23 +833,22 @@ class PPTService:
             elif adj_type == "auto_fit":
                 auto_fit_adjustments.append(adj)
             elif adj_type == "font_size":
-                # Count font size adjustments per slide for proper compounding
-                # Multiple "decrease" requests should compound (0.85^n)
-                if slide_num not in font_size_counts_by_slide:
-                    font_size_counts_by_slide[slide_num] = {"decrease": 0, "increase": 0}
-                direction = adj.get("target_value", "decrease")
-                if direction in ("decrease", "increase"):
-                    font_size_counts_by_slide[slide_num][direction] += 1
+                # Apply to individual text boxes, not whole slide
+                font_size_adjustments.append(adj)
             elif adj_type == "overflow":
-                # Overflow means text is too big - treat as font_size decrease
-                if slide_num not in font_size_counts_by_slide:
-                    font_size_counts_by_slide[slide_num] = {"decrease": 0, "increase": 0}
-                font_size_counts_by_slide[slide_num]["decrease"] += 1
+                # Overflow: apply font_size decrease to specific text
+                font_size_adjustments.append({
+                    **adj,
+                    "adjustment_type": "font_size",
+                    "target_value": "decrease"
+                })
             elif adj_type == "text_box":
-                # Text box width issues - also treat as font_size decrease for now
-                if slide_num not in font_size_counts_by_slide:
-                    font_size_counts_by_slide[slide_num] = {"decrease": 0, "increase": 0}
-                font_size_counts_by_slide[slide_num]["decrease"] += 1
+                # Text box width issues: apply font_size decrease to specific text
+                font_size_adjustments.append({
+                    **adj,
+                    "adjustment_type": "font_size",
+                    "target_value": "decrease"
+                })
 
         # Group adjustments by slide
         alignments_by_slide: dict[int, list[dict]] = {}
@@ -889,6 +885,13 @@ class PPTService:
             if slide_num not in auto_fit_by_slide:
                 auto_fit_by_slide[slide_num] = []
             auto_fit_by_slide[slide_num].append(adj)
+
+        font_size_by_slide: dict[int, list[dict]] = {}
+        for adj in font_size_adjustments:
+            slide_num = adj.get("slide_number", 0)
+            if slide_num not in font_size_by_slide:
+                font_size_by_slide[slide_num] = []
+            font_size_by_slide[slide_num].append(adj)
 
         applied_count = 0
 
@@ -949,28 +952,12 @@ class PPTService:
                         shape, slide_auto_fits
                     )
 
-            # Apply font size adjustments (per-slide with compounding)
-            if slide_idx in font_size_counts_by_slide:
-                counts = font_size_counts_by_slide[slide_idx]
-                # Calculate net adjustment: decrease_count - increase_count
-                # Then apply compounding factor
-                net_decrease = counts["decrease"] - counts["increase"]
-                if net_decrease != 0:
-                    # Compound factor: 0.85^n for decrease, 1.2^n for increase
-                    if net_decrease > 0:
-                        # Net decrease: 0.85^net_decrease
-                        compound_factor = 0.85 ** net_decrease
-                    else:
-                        # Net increase: 1.2^abs(net_decrease)
-                        compound_factor = 1.2 ** abs(net_decrease)
-
-                    applied_count += self._apply_font_size_to_slide_with_factor(slide, compound_factor)
-                    logger.info(
-                        "font_size_slide_adjusted",
-                        slide=slide_idx,
-                        decrease_count=counts["decrease"],
-                        increase_count=counts["increase"],
-                        compound_factor=round(compound_factor, 3),
+            # Apply font size adjustments (individual text boxes, not whole slide)
+            if slide_idx in font_size_by_slide:
+                slide_font_sizes = font_size_by_slide[slide_idx]
+                for shape in slide.shapes:
+                    applied_count += self._apply_font_size_to_shape_individual(
+                        shape, slide_font_sizes
                     )
 
         self.presentation.save(output_path)
@@ -1313,5 +1300,71 @@ class PPTService:
                         applied_count += 1
                     except Exception as e:
                         logger.debug("auto_fit_adjustment_error", text=adj_text[:30], error=str(e))
+
+        return applied_count
+
+    def _apply_font_size_to_shape_individual(
+        self,
+        shape,
+        adjustments: list[dict],
+        depth: int = 0
+    ) -> int:
+        """Apply font_size adjustments to individual matching text boxes only.
+
+        Unlike the slide-level adjustment, this only changes font size for
+        text boxes that match the adjustment's target text.
+        """
+        applied_count = 0
+
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape) and depth < 10:
+            try:
+                for child_shape in shape.shapes:
+                    applied_count += self._apply_font_size_to_shape_individual(
+                        child_shape, adjustments, depth + 1
+                    )
+            except Exception as e:
+                logger.debug("group_font_size_error", error=str(e))
+
+        # Handle text frames
+        if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
+            text_frame = shape.text_frame
+            shape_text = " ".join(p.text.strip() for p in text_frame.paragraphs if p.text.strip())
+
+            for adj in adjustments:
+                adj_text = adj.get("text", "")
+                target_value = adj.get("target_value", "decrease")
+
+                if adj_text and adj_text in shape_text:
+                    try:
+                        # Determine adjustment factor
+                        if target_value == "decrease":
+                            factor = 0.85  # 15% decrease
+                        elif target_value == "increase":
+                            factor = 1.15  # 15% increase
+                        else:
+                            # Try to parse percentage like "80%"
+                            try:
+                                factor = float(target_value.replace("%", "")) / 100
+                            except ValueError:
+                                factor = 0.85  # default to decrease
+
+                        # Apply to all runs in this text frame
+                        for paragraph in text_frame.paragraphs:
+                            for run in paragraph.runs:
+                                if run.font.size is not None:
+                                    current_size = run.font.size.pt
+                                    new_size = max(6, current_size * factor)  # Min 6pt
+                                    run.font.size = Pt(new_size)
+
+                        logger.info(
+                            "font_size_individual_adjusted",
+                            text=adj_text[:30],
+                            direction=target_value,
+                            factor=round(factor, 2),
+                        )
+                        applied_count += 1
+                    except Exception as e:
+                        logger.debug("font_size_individual_error", text=adj_text[:30], error=str(e))
 
         return applied_count
