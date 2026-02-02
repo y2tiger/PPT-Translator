@@ -43,6 +43,24 @@ function setupOptionChangeListeners() {
     document.querySelectorAll('input[name="translation-style"]').forEach(radio => {
         radio.addEventListener('change', saveOptionsToLocalStorage);
     });
+
+    // OCR checkboxes
+    const enableOcrCheckbox = document.getElementById('enable-ocr');
+    const ocrRetryOption = document.getElementById('ocr-retry-option');
+    const enableOcrRetryCheckbox = document.getElementById('enable-ocr-retry');
+
+    enableOcrCheckbox.addEventListener('change', () => {
+        // Toggle retry option visibility
+        if (enableOcrCheckbox.checked) {
+            ocrRetryOption.classList.remove('disabled');
+        } else {
+            ocrRetryOption.classList.add('disabled');
+            enableOcrRetryCheckbox.checked = false;
+        }
+        saveOptionsToLocalStorage();
+    });
+
+    enableOcrRetryCheckbox.addEventListener('change', saveOptionsToLocalStorage);
 }
 
 // Save options to localStorage
@@ -53,6 +71,8 @@ function saveOptionsToLocalStorage() {
         targetFont: targetFontSelect.value,
         visualQaIterations: document.getElementById('visual-qa-iterations').value,
         translationStyle: document.querySelector('input[name="translation-style"]:checked')?.value || 'technical',
+        enableOcr: document.getElementById('enable-ocr').checked,
+        enableOcrRetry: document.getElementById('enable-ocr-retry').checked,
     };
     localStorage.setItem('ppt-translator-options', JSON.stringify(options));
 }
@@ -88,6 +108,20 @@ function loadOptionsFromLocalStorage() {
                 if (styleRadio) {
                     styleRadio.checked = true;
                 }
+            }
+            // OCR options
+            const enableOcrCheckbox = document.getElementById('enable-ocr');
+            const ocrRetryOption = document.getElementById('ocr-retry-option');
+            const enableOcrRetryCheckbox = document.getElementById('enable-ocr-retry');
+
+            if (options.enableOcr !== undefined) {
+                enableOcrCheckbox.checked = options.enableOcr;
+                if (!options.enableOcr) {
+                    ocrRetryOption.classList.add('disabled');
+                }
+            }
+            if (options.enableOcrRetry !== undefined) {
+                enableOcrRetryCheckbox.checked = options.enableOcrRetry;
             }
         }, 500);
     } catch (error) {
@@ -373,6 +407,8 @@ async function startTranslation() {
     const targetFont = targetFontSelect.value;
     const visualQaIterations = parseInt(document.getElementById('visual-qa-iterations').value) || 0;
     const translationStyle = document.querySelector('input[name="translation-style"]:checked')?.value || 'technical';
+    const enableOcr = document.getElementById('enable-ocr').checked;
+    const enableOcrRetry = document.getElementById('enable-ocr-retry').checked;
 
     if (!sourceLang || !targetLang) {
         showInlineError('원본 언어와 목표 언어를 모두 선택해주세요');
@@ -414,7 +450,7 @@ async function startTranslation() {
         addActivityLog(`파일 ${i + 1}/${uploadedFiles.length} 번역 시작: ${uploadedFiles[i].filename}`);
 
         try {
-            await processFile(uploadedFiles[i], sourceLang, targetLang, targetFont, visualQaIterations, translationStyle);
+            await processFile(uploadedFiles[i], sourceLang, targetLang, targetFont, visualQaIterations, translationStyle, enableOcr, enableOcrRetry);
             uploadedFiles[i].status = 'completed';
             addActivityLog(`파일 ${i + 1}/${uploadedFiles.length} 완료: ${uploadedFiles[i].filename}`);
         } catch (error) {
@@ -430,13 +466,15 @@ async function startTranslation() {
 }
 
 // Process a single file
-async function processFile(file, sourceLang, targetLang, targetFont, visualQaIterations, translationStyle) {
+async function processFile(file, sourceLang, targetLang, targetFont, visualQaIterations, translationStyle, enableOcr, enableOcrRetry) {
     const formData = new FormData();
     formData.append('source_language', sourceLang);
     formData.append('target_language', targetLang);
     formData.append('target_font', targetFont);
     formData.append('visual_qa_iterations', visualQaIterations.toString());
     formData.append('translation_style', translationStyle);
+    formData.append('enable_ocr', enableOcr ? 'true' : 'false');
+    formData.append('enable_ocr_retry', enableOcrRetry ? 'true' : 'false');
 
     const response = await fetch(`/api/translate/${file.fileId}`, {
         method: 'POST',

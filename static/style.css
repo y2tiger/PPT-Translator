@@ -305,6 +305,44 @@ header h1 {
     }
 }
 
+/* Checkbox Options */
+.checkbox-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.checkbox-option {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    cursor: pointer;
+    padding: 0.5rem 0;
+}
+
+.checkbox-option input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--primary-color);
+    cursor: pointer;
+}
+
+.checkbox-label {
+    color: var(--text-primary);
+    font-size: 0.9rem;
+}
+
+.checkbox-option.sub-option {
+    margin-left: 1.5rem;
+    opacity: 0.8;
+}
+
+.checkbox-option.sub-option.disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
 /* Agent Info */
 .agent-info {
     background: rgba(99, 102, 241, 0.1);

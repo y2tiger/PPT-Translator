@@ -115,6 +115,7 @@ class OCRAgent:
         image_bytes: bytes,
         source_lang: Optional[Language] = None,
         context: str = "",
+        enable_retry: bool = False,
     ) -> OCRResult:
         """
         Extract text from an image using GPT-4o Vision.
@@ -123,6 +124,7 @@ class OCRAgent:
             image_bytes: Raw image bytes (PNG, JPEG, GIF, WEBP)
             source_lang: Expected source language (helps improve accuracy)
             context: Additional context about the image (e.g., "diagram", "screenshot")
+            enable_retry: If True, retry with a different prompt on empty response
 
         Returns:
             OCRResult with extracted text and confidence score
@@ -155,10 +157,9 @@ class OCRAgent:
         if context:
             context_hint = f"This image is from: {context}. "
 
-        # Try up to 2 times with different prompts
-        prompts = [
-            # First attempt: standard prompt
-            f"""You are an OCR expert. Extract ALL text visible in this image. {lang_hint}{context_hint}
+        # Build prompts list - include retry prompt only if enable_retry is True
+        # First attempt: standard prompt
+        standard_prompt = f"""You are an OCR expert. Extract ALL text visible in this image. {lang_hint}{context_hint}
 
 CRITICAL: Look VERY carefully for ANY text, including:
 - Labels on charts, graphs, diagrams
@@ -195,10 +196,12 @@ Return ONLY valid JSON:
 bbox: [x, y, width, height] as percentages 0-100 of image size
 font_size: "small", "medium", or "large"
 
-If truly NO text exists, return: {{"text": "", "confidence": 0.95, "language": "unknown", "blocks": []}}""",
+If truly NO text exists, return: {{"text": "", "confidence": 0.95, "language": "unknown", "blocks": []}}"""
 
+        # Build prompts list based on enable_retry option
+        if enable_retry:
             # Second attempt: more aggressive prompt for tables/charts
-            f"""IMPORTANT: This image likely contains a TABLE or CHART with text. {lang_hint}{context_hint}
+            retry_prompt = f"""IMPORTANT: This image likely contains a TABLE or CHART with text. {lang_hint}{context_hint}
 
 Please look VERY carefully at this image. I believe there IS text in it.
 
@@ -222,7 +225,9 @@ Return ONLY valid JSON:
 }}
 
 If truly NO text after careful inspection: {{"text": "", "confidence": 0.95, "language": "unknown", "blocks": []}}"""
-        ]
+            prompts = [standard_prompt, retry_prompt]
+        else:
+            prompts = [standard_prompt]
 
         for attempt, prompt in enumerate(prompts):
             try:
@@ -363,6 +368,7 @@ If truly NO text after careful inspection: {{"text": "", "confidence": 0.95, "la
         images: list[tuple[str, bytes]],  # List of (image_id, image_bytes)
         source_lang: Optional[Language] = None,
         context: str = "",
+        enable_retry: bool = False,
     ) -> dict[str, OCRResult]:
         """
         Extract text from multiple images.
@@ -371,6 +377,7 @@ If truly NO text after careful inspection: {{"text": "", "confidence": 0.95, "la
             images: List of (image_id, image_bytes) tuples
             source_lang: Expected source language
             context: Context about the images
+            enable_retry: If True, retry with a different prompt on empty response
 
         Returns:
             Dictionary mapping image_id to OCRResult
@@ -383,6 +390,7 @@ If truly NO text after careful inspection: {{"text": "", "confidence": 0.95, "la
                     image_bytes=image_bytes,
                     source_lang=source_lang,
                     context=context,
+                    enable_retry=enable_retry,
                 )
                 results[image_id] = result
 

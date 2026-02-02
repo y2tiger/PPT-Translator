@@ -89,6 +89,20 @@
                         </select>
                         <span class="hint">시각적 품질 검증 횟수 (0=사용안함, 높을수록 품질↑ 시간↑)</span>
                     </div>
+                    <div class="option-group option-full">
+                        <label>이미지 OCR 설정</label>
+                        <div class="checkbox-options">
+                            <label class="checkbox-option">
+                                <input type="checkbox" id="enable-ocr" checked>
+                                <span class="checkbox-label">이미지 내 텍스트 번역 (OCR)</span>
+                            </label>
+                            <label class="checkbox-option sub-option" id="ocr-retry-option">
+                                <input type="checkbox" id="enable-ocr-retry">
+                                <span class="checkbox-label">OCR 실패 시 재시도 (느리지만 더 정확)</span>
+                            </label>
+                        </div>
+                        <span class="hint">이미지에 포함된 텍스트를 추출하여 번역합니다</span>
+                    </div>
                 </div>
                 <div class="agent-info">
                     <h3>멀티에이전트 프로세스</h3>
