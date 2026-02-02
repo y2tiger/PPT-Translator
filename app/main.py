@@ -349,8 +349,14 @@ async def process_translation(
                 total_images = sum(len(imgs) for imgs in images_by_slide.values())
                 ocr_summary.total_images = total_images
 
-                if total_images > 0:
-                    logger.info(
+                if total_images == 0:
+                    logger.warning(
+                        "ocr_no_images_found",
+                        file_id=file_id,
+                        message="No images detected in PPT for OCR",
+                    )
+                else:
+                    logger.warning(
                         "ocr_extraction_starting",
                         file_id=file_id,
                         total_images=total_images,
@@ -417,13 +423,14 @@ async def process_translation(
                                 if ocr_result.is_uncertain:
                                     ocr_summary.uncertain_extractions += 1
 
-                                logger.info(
+                                logger.warning(
                                     "ocr_blocks_extracted",
                                     file_id=file_id,
                                     slide=slide_num,
                                     image_id=image_id,
                                     blocks_count=len(ocr_result.blocks),
                                     confidence=ocr_result.confidence_score,
+                                    blocks_preview=[b.text[:30] for b in ocr_result.blocks[:3]],
                                 )
                             elif ocr_result.text and ocr_result.confidence_score >= OCR_CONFIDENCE_THRESHOLD:
                                 # Fallback: no blocks but has text - create single block
@@ -458,7 +465,7 @@ async def process_translation(
                                     confidence=ocr_result.confidence_score,
                                 )
 
-                    logger.info(
+                    logger.warning(
                         "ocr_extraction_complete",
                         file_id=file_id,
                         total_images=total_images,
@@ -1110,7 +1117,7 @@ async def process_translation(
 
                     ocr_summary.images_translated = overlays_applied
 
-                    logger.info(
+                    logger.warning(
                         "ocr_overlays_applied",
                         file_id=file_id,
                         total_blocks=len(ocr_blocks_data),
