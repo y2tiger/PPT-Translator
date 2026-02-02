@@ -57,7 +57,12 @@ class TestOCRResultContract:
 
     def test_ocr_result_to_dict(self):
         """OCRResult.to_dict() should return valid dictionary."""
-        block = OCRBlock(text="block1", confidence=0.9)
+        block = OCRBlock(
+            text="block1",
+            bbox=(10.0, 20.0, 50.0, 15.0),
+            confidence=0.9,
+            font_size_hint="medium",
+        )
         result = OCRResult(
             text="Full text",
             confidence_score=0.85,
@@ -73,6 +78,8 @@ class TestOCRResultContract:
         assert d["language_guess"] == "ko"
         assert len(d["blocks"]) == 1
         assert d["blocks"][0]["text"] == "block1"
+        assert d["blocks"][0]["bbox"] == (10.0, 20.0, 50.0, 15.0)
+        assert d["blocks"][0]["font_size_hint"] == "medium"
         assert d["error"] is None
         assert d["is_uncertain"] is False
 
@@ -92,13 +99,24 @@ class TestOCRResultContract:
         """OCRBlock should have required fields."""
         block = OCRBlock(
             text="Sample text",
-            bbox=(10, 20, 100, 50),
+            bbox=(10.0, 20.0, 80.0, 15.0),  # x%, y%, width%, height%
             confidence=0.95,
+            font_size_hint="large",
         )
 
         assert block.text == "Sample text"
-        assert block.bbox == (10, 20, 100, 50)
+        assert block.bbox == (10.0, 20.0, 80.0, 15.0)
         assert block.confidence == 0.95
+        assert block.font_size_hint == "large"
+
+    def test_ocr_block_defaults(self):
+        """OCRBlock should have sensible defaults."""
+        block = OCRBlock(text="Just text")
+
+        assert block.text == "Just text"
+        assert block.bbox == (0.0, 0.0, 100.0, 100.0)
+        assert block.confidence == 1.0
+        assert block.font_size_hint == "medium"
 
 
 class TestOCRAgentImageDetection:

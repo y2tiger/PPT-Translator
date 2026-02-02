@@ -32,8 +32,9 @@ CONFIDENCE_LOW = 0.3
 class OCRBlock:
     """A block of text extracted from an image with positional info."""
     text: str
-    bbox: tuple[int, int, int, int] = (0, 0, 0, 0)  # x1, y1, x2, y2
+    bbox: tuple[float, float, float, float] = (0.0, 0.0, 100.0, 100.0)  # x%, y%, width%, height% (relative to image)
     confidence: float = 1.0
+    font_size_hint: str = "medium"  # "small", "medium", "large" - relative font size hint
 
 
 @dataclass
@@ -56,7 +57,15 @@ class OCRResult:
             "text": self.text,
             "confidence_score": self.confidence_score,
             "language_guess": self.language_guess,
-            "blocks": [{"text": b.text, "bbox": b.bbox, "confidence": b.confidence} for b in self.blocks],
+            "blocks": [
+                {
+                    "text": b.text,
+                    "bbox": b.bbox,
+                    "confidence": b.confidence,
+                    "font_size_hint": b.font_size_hint,
+                }
+                for b in self.blocks
+            ],
             "error": self.error,
             "is_uncertain": self.is_uncertain,
         }
@@ -147,34 +156,50 @@ class OCRAgent:
             if context:
                 context_hint = f"This image is from: {context}. "
 
-            prompt = f"""Extract ALL text visible in this image. {lang_hint}{context_hint}
+            prompt = f"""Extract ALL text visible in this image WITH their positions. {lang_hint}{context_hint}
 
 IMPORTANT RULES:
 1. Extract text EXACTLY as it appears (preserve spelling, capitalization)
-2. Maintain reading order (top to bottom, left to right for most languages)
-3. Preserve line breaks where they appear in the image
-4. Include ALL text, even if partially visible or small
+2. Identify each separate text block/region in the image
+3. For each block, estimate its position as percentages of image dimensions
+4. Estimate relative font size (small/medium/large based on text height vs image)
 5. Do NOT translate - extract the original text only
-6. If no text is visible, return empty string for text field
+6. If no text is visible, return empty blocks array
 
 Return ONLY valid JSON in this exact format:
 {{
-  "text": "The complete extracted text here",
+  "text": "All text combined here",
   "confidence": 0.95,
   "language": "ko",
   "blocks": [
     {{
-      "text": "First block of text",
-      "confidence": 0.9
+      "text": "First text block",
+      "bbox": [10, 5, 80, 15],
+      "confidence": 0.9,
+      "font_size": "large"
+    }},
+    {{
+      "text": "Second text block",
+      "bbox": [10, 20, 60, 10],
+      "confidence": 0.85,
+      "font_size": "medium"
     }}
   ]
 }}
 
 Where:
-- text: All extracted text combined (separated by newlines if multi-line)
-- confidence: Your confidence in extraction accuracy (0.0-1.0)
+- text: All extracted text combined
+- confidence: Overall accuracy (0.0-1.0)
 - language: Detected language code (ko, en, ja, zh, etc.)
-- blocks: Optional list of text blocks if multiple distinct areas detected"""
+- blocks: List of text regions with:
+  - text: The text in this region
+  - bbox: [x%, y%, width%, height%] as percentages (0-100) of image size
+    - x%: horizontal position from left edge
+    - y%: vertical position from top edge
+    - width%: width of text region
+    - height%: height of text region
+  - confidence: Confidence for this block
+  - font_size: "small" (< 5% height), "medium" (5-10%), "large" (> 10%)"""
 
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -216,9 +241,23 @@ Where:
             # Parse blocks if present
             blocks = []
             for block_data in result.get("blocks", []):
+                # Parse bbox - can be list or missing
+                bbox_raw = block_data.get("bbox", [0, 0, 100, 100])
+                if isinstance(bbox_raw, (list, tuple)) and len(bbox_raw) >= 4:
+                    bbox = (
+                        float(bbox_raw[0]),  # x%
+                        float(bbox_raw[1]),  # y%
+                        float(bbox_raw[2]),  # width%
+                        float(bbox_raw[3]),  # height%
+                    )
+                else:
+                    bbox = (0.0, 0.0, 100.0, 100.0)
+
                 blocks.append(OCRBlock(
                     text=block_data.get("text", ""),
+                    bbox=bbox,
                     confidence=float(block_data.get("confidence", confidence)),
+                    font_size_hint=block_data.get("font_size", "medium"),
                 ))
 
             # Mark as uncertain if confidence is low

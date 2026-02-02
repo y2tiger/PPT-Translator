@@ -1,11 +1,12 @@
 """
-Tests for PPT image extraction functionality.
+Tests for PPT image extraction and OCR overlay functionality.
 
 These tests verify:
 1. Image extraction from PPT shapes
 2. Filtering of small images
 3. Handling of group shapes with images
 4. Image metadata extraction
+5. OCR text overlay creation
 """
 
 import pytest
@@ -14,6 +15,8 @@ from app.services.ppt_service import (
     PPTService,
     MIN_IMAGE_SIZE_BYTES,
     MIN_IMAGE_DIMENSION,
+    OCRTextOverlay,
+    FONT_SIZE_MAP,
 )
 
 
@@ -164,6 +167,83 @@ class TestGetImagesBySlide:
         assert len(grouped[1]) == 2  # Slide 1 has 2 images
         assert len(grouped[2]) == 1  # Slide 2 has 1 image
         assert len(grouped[3]) == 1  # Slide 3 has 1 image
+
+
+class TestOCRTextOverlay:
+    """Test OCRTextOverlay data class."""
+
+    def test_overlay_creation(self):
+        """OCRTextOverlay should store all required fields."""
+        overlay = OCRTextOverlay(
+            slide_number=1,
+            shape_id=42,
+            original_text="안녕하세요",
+            translated_text="Hello",
+            bbox=(10.0, 20.0, 50.0, 15.0),
+            font_size_hint="medium",
+            confidence=0.95,
+        )
+
+        assert overlay.slide_number == 1
+        assert overlay.shape_id == 42
+        assert overlay.original_text == "안녕하세요"
+        assert overlay.translated_text == "Hello"
+        assert overlay.bbox == (10.0, 20.0, 50.0, 15.0)
+        assert overlay.font_size_hint == "medium"
+        assert overlay.confidence == 0.95
+
+    def test_overlay_defaults(self):
+        """OCRTextOverlay should have sensible defaults."""
+        overlay = OCRTextOverlay(
+            slide_number=1,
+            shape_id=42,
+            original_text="원본",
+            translated_text="Translated",
+            bbox=(0.0, 0.0, 100.0, 100.0),
+        )
+
+        assert overlay.font_size_hint == "medium"
+        assert overlay.confidence == 1.0
+
+
+class TestFontSizeMapping:
+    """Test font size mapping for overlays."""
+
+    def test_font_size_map_has_required_keys(self):
+        """Font size map should have small, medium, large."""
+        assert "small" in FONT_SIZE_MAP
+        assert "medium" in FONT_SIZE_MAP
+        assert "large" in FONT_SIZE_MAP
+
+    def test_font_sizes_are_reasonable(self):
+        """Font sizes should be reasonable values."""
+        assert FONT_SIZE_MAP["small"] > 0
+        assert FONT_SIZE_MAP["medium"] > FONT_SIZE_MAP["small"]
+        assert FONT_SIZE_MAP["large"] > FONT_SIZE_MAP["medium"]
+        assert FONT_SIZE_MAP["large"] <= 72  # Max reasonable PPT font size
+
+
+class TestBboxCalculation:
+    """Test bounding box to position calculation."""
+
+    def test_bbox_percentage_to_emu(self):
+        """Bbox percentages should convert correctly to EMUs."""
+        # Image is 1000 EMUs wide and 500 EMUs tall
+        img_width = 1000
+        img_height = 500
+
+        # Text at 10% from left, 20% from top, 50% width, 30% height
+        x_pct, y_pct, w_pct, h_pct = (10.0, 20.0, 50.0, 30.0)
+
+        text_left = int(img_width * x_pct / 100)
+        text_top = int(img_height * y_pct / 100)
+        text_width = int(img_width * w_pct / 100)
+        text_height = int(img_height * h_pct / 100)
+
+        assert text_left == 100   # 10% of 1000
+        assert text_top == 100    # 20% of 500
+        assert text_width == 500  # 50% of 1000
+        assert text_height == 150  # 30% of 500
 
 
 if __name__ == "__main__":

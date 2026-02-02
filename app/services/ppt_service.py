@@ -3,10 +3,13 @@ import structlog
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
 from pptx.shapes.picture import Picture
-from pptx.util import Pt
+from pptx.util import Pt, Emu
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN, MSO_AUTO_SIZE
 from pptx.enum.shapes import MSO_SHAPE_TYPE
-from typing import Generator
+from pptx.dml.color import RGBColor
+from pptx.oxml.ns import qn
+from typing import Generator, Optional
+from dataclasses import dataclass
 
 logger = structlog.get_logger(__name__)
 
@@ -14,6 +17,25 @@ logger = structlog.get_logger(__name__)
 # Minimum image size for OCR (skip tiny icons/decorations)
 MIN_IMAGE_SIZE_BYTES = 1000  # 1KB minimum
 MIN_IMAGE_DIMENSION = 50     # 50px minimum width/height
+
+# Font size mapping for OCR text overlays
+FONT_SIZE_MAP = {
+    "small": 8,
+    "medium": 12,
+    "large": 18,
+}
+
+
+@dataclass
+class OCRTextOverlay:
+    """Information for creating a text overlay on an image."""
+    slide_number: int
+    shape_id: int                    # The image shape ID
+    original_text: str               # OCR extracted text
+    translated_text: str             # Translated text
+    bbox: tuple[float, float, float, float]  # x%, y%, width%, height%
+    font_size_hint: str = "medium"   # "small", "medium", "large"
+    confidence: float = 1.0
 
 
 def _reset_character_spacing(run):
@@ -417,6 +439,169 @@ class PPTService:
         )
 
         return images_by_slide
+
+    def _find_shape_by_id(self, slide, shape_id: int, depth: int = 0):
+        """Find a shape by its ID, including in group shapes."""
+        for shape in slide.shapes:
+            if getattr(shape, 'shape_id', None) == shape_id:
+                return shape
+            # Search in group shapes
+            if isinstance(shape, GroupShape) and depth < 10:
+                for child in shape.shapes:
+                    if getattr(child, 'shape_id', None) == shape_id:
+                        return child
+        return None
+
+    def apply_ocr_overlays(
+        self,
+        overlays: list[OCRTextOverlay],
+        output_path: str,
+        target_font: str = "Arial",
+    ) -> tuple[str, int]:
+        """
+        Apply translated text overlays on top of images.
+
+        Creates semi-transparent text boxes positioned over the original
+        image locations where OCR detected text.
+
+        Args:
+            overlays: List of OCRTextOverlay objects with position and text info
+            output_path: Path to save the modified presentation
+            target_font: Font to use for overlay text
+
+        Returns:
+            Tuple of (output_path, number of overlays applied)
+        """
+        if not overlays:
+            self.presentation.save(output_path)
+            return output_path, 0
+
+        applied_count = 0
+
+        # Group overlays by slide
+        overlays_by_slide: dict[int, list[OCRTextOverlay]] = {}
+        for overlay in overlays:
+            if overlay.slide_number not in overlays_by_slide:
+                overlays_by_slide[overlay.slide_number] = []
+            overlays_by_slide[overlay.slide_number].append(overlay)
+
+        for slide_idx, slide in enumerate(self.presentation.slides, 1):
+            if slide_idx not in overlays_by_slide:
+                continue
+
+            slide_overlays = overlays_by_slide[slide_idx]
+
+            for overlay in slide_overlays:
+                try:
+                    # Find the image shape
+                    image_shape = self._find_shape_by_id(slide, overlay.shape_id)
+                    if not image_shape:
+                        logger.warning(
+                            "ocr_overlay_shape_not_found",
+                            slide=slide_idx,
+                            shape_id=overlay.shape_id,
+                        )
+                        continue
+
+                    # Get image position and size
+                    img_left = image_shape.left
+                    img_top = image_shape.top
+                    img_width = image_shape.width
+                    img_height = image_shape.height
+
+                    # Calculate text box position from bbox percentages
+                    # bbox = (x%, y%, width%, height%)
+                    x_pct, y_pct, w_pct, h_pct = overlay.bbox
+
+                    # Convert percentages to EMUs
+                    text_left = img_left + int(img_width * x_pct / 100)
+                    text_top = img_top + int(img_height * y_pct / 100)
+                    text_width = int(img_width * w_pct / 100)
+                    text_height = int(img_height * h_pct / 100)
+
+                    # Ensure minimum size
+                    min_size = Emu(Pt(20).emu)  # Minimum 20pt
+                    text_width = max(text_width, min_size)
+                    text_height = max(text_height, min_size)
+
+                    # Add text box
+                    textbox = slide.shapes.add_textbox(
+                        text_left, text_top, text_width, text_height
+                    )
+                    tf = textbox.text_frame
+                    tf.word_wrap = True
+
+                    # Set text frame properties
+                    tf.margin_left = Pt(2)
+                    tf.margin_right = Pt(2)
+                    tf.margin_top = Pt(1)
+                    tf.margin_bottom = Pt(1)
+
+                    # Add paragraph with translated text
+                    p = tf.paragraphs[0]
+                    p.text = overlay.translated_text
+                    p.alignment = PP_ALIGN.LEFT
+
+                    # Style the text
+                    for run in p.runs:
+                        run.font.name = target_font
+                        font_size = FONT_SIZE_MAP.get(overlay.font_size_hint, 12)
+                        run.font.size = Pt(font_size)
+                        run.font.color.rgb = RGBColor(0, 0, 0)  # Black text
+
+                    # Add semi-transparent white background to text box
+                    # This makes the translated text readable over the image
+                    fill = textbox.fill
+                    fill.solid()
+                    fill.fore_color.rgb = RGBColor(255, 255, 255)
+
+                    # Set transparency (requires accessing XML directly)
+                    # 70% opacity (30% transparent)
+                    try:
+                        spPr = textbox._sp.spPr
+                        solidFill = spPr.find(qn('a:solidFill'))
+                        if solidFill is not None:
+                            srgbClr = solidFill.find(qn('a:srgbClr'))
+                            if srgbClr is not None:
+                                from lxml import etree
+                                alpha = etree.SubElement(srgbClr, qn('a:alpha'))
+                                alpha.set('val', '70000')  # 70% opacity
+                    except Exception as e:
+                        logger.debug("transparency_set_failed", error=str(e))
+
+                    # Add thin border
+                    line = textbox.line
+                    line.color.rgb = RGBColor(100, 100, 100)
+                    line.width = Pt(0.5)
+
+                    applied_count += 1
+
+                    logger.info(
+                        "ocr_overlay_applied",
+                        slide=slide_idx,
+                        shape_id=overlay.shape_id,
+                        text_preview=overlay.translated_text[:30],
+                        bbox=overlay.bbox,
+                        font_size=overlay.font_size_hint,
+                    )
+
+                except Exception as e:
+                    logger.error(
+                        "ocr_overlay_failed",
+                        slide=slide_idx,
+                        shape_id=overlay.shape_id,
+                        error=str(e),
+                    )
+
+        self.presentation.save(output_path)
+
+        logger.info(
+            "ocr_overlays_complete",
+            total_overlays=len(overlays),
+            applied=applied_count,
+        )
+
+        return output_path, applied_count
 
     def _calculate_font_size_ratio(self, original: str, translated: str) -> float:
         """Calculate font size ratio based on text length difference.
