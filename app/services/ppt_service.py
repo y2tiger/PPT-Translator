@@ -1010,7 +1010,7 @@ class PPTService:
                         applied_tracker[para_text] = True
                     else:
                         # No runs in paragraph - need to add text directly
-                        logger.warning(
+                        logger.debug(
                             "no_runs_in_paragraph",
                             shape_id=shape_id,
                             shape_type=shape_type,

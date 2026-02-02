@@ -221,7 +221,7 @@ Return as JSON:
                         priority=action_data.get("priority", 1),
                     ))
 
-            logger.warning(
+            logger.debug(
                 "visual_action_decision_complete",
                 slide=slide_number,
                 quality_score=result.get("quality_score", 0),

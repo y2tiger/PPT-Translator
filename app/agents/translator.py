@@ -169,7 +169,7 @@ Output: "Jakość produktu" """
         source_name = LANGUAGE_NAMES[source_lang]
         target_name = LANGUAGE_NAMES[target_lang]
 
-        logger.warning(
+        logger.debug(
             "slide_batch_translation_started",
             slide_number=slide_number,
             text_count=len(texts_to_translate),
@@ -275,7 +275,7 @@ Now translate:"""
                 else:
                     # Track missing texts for individual fallback
                     missing_texts.append(text)
-                    logger.warning(
+                    logger.debug(
                         "batch_translation_missing",
                         slide_number=slide_number,
                         missing_key=key,

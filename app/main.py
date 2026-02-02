@@ -611,7 +611,7 @@ async def process_translation(
                 )
             else:
                 # No fixes available, break to avoid infinite loop
-                logger.warning(
+                logger.info(
                     "no_fixes_available",
                     file_id=file_id,
                     iteration=qa_iteration,
@@ -675,7 +675,7 @@ async def process_translation(
             translated_for_qa = UPLOAD_DIR / f"{file_id}_translated_for_qa.pptx"
 
             for visual_iteration in range(1, max_iterations + 1):
-                logger.warning(
+                logger.info(
                     "visual_qa_iteration_start",
                     file_id=file_id,
                     iteration=visual_iteration,
@@ -913,7 +913,7 @@ async def process_translation(
                                 )
 
                     # Apply format adjustments (alignment, font size) from Visual QA
-                    logger.warning(
+                    logger.debug(
                         "visual_qa_format_adjustments_received",
                         file_id=file_id,
                         iteration=visual_iteration,
@@ -969,7 +969,7 @@ async def process_translation(
                                 "adjustment_type": adj.adjustment_type,
                                 "target_value": adj.target_value,
                             })
-                            logger.warning(
+                            logger.debug(
                                 "format_adjustment_mapped",
                                 slide=adj.slide_number,
                                 original=adj.text[:30] if adj.text else "",
@@ -980,7 +980,7 @@ async def process_translation(
 
                         # Apply adjustments to the translated PPT
                         # IMPORTANT: Load translated_for_qa since it contains the translated text
-                        logger.warning(
+                        logger.debug(
                             "applying_format_adjustments",
                             file_id=file_id,
                             iteration=visual_iteration,
@@ -995,7 +995,7 @@ async def process_translation(
                         # Accumulate adjustments for re-application after each translation
                         all_format_adjustments.extend(adjustments_to_apply)
 
-                        logger.warning(
+                        logger.debug(
                             "format_adjustments_result",
                             file_id=file_id,
                             iteration=visual_iteration,
@@ -1005,7 +1005,7 @@ async def process_translation(
 
                         if applied_count > 0:
                             has_work_to_do = True
-                            logger.warning(
+                            logger.info(
                                 "format_adjustments_applied",
                                 file_id=file_id,
                                 iteration=visual_iteration,
