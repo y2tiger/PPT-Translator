@@ -1,11 +1,41 @@
+import io
 import structlog
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
-from pptx.util import Pt
+from pptx.shapes.picture import Picture
+from pptx.util import Pt, Emu
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN, MSO_AUTO_SIZE
-from typing import Generator
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.dml.color import RGBColor
+from pptx.oxml.ns import qn
+from typing import Generator, Optional
+from dataclasses import dataclass
 
 logger = structlog.get_logger(__name__)
+
+
+# Minimum image size for OCR (skip tiny icons/decorations)
+MIN_IMAGE_SIZE_BYTES = 1000  # 1KB minimum
+MIN_IMAGE_DIMENSION = 50     # 50px minimum width/height
+
+# Font size mapping for OCR text overlays
+FONT_SIZE_MAP = {
+    "small": 8,
+    "medium": 12,
+    "large": 18,
+}
+
+
+@dataclass
+class OCRTextOverlay:
+    """Information for creating a text overlay on an image."""
+    slide_number: int
+    shape_id: int                    # The image shape ID
+    original_text: str               # OCR extracted text
+    translated_text: str             # Translated text
+    bbox: tuple[float, float, float, float]  # x%, y%, width%, height%
+    font_size_hint: str = "medium"   # "small", "medium", "large"
+    confidence: float = 1.0
 
 
 def _reset_character_spacing(run):
@@ -255,6 +285,323 @@ class PPTService:
     def get_slide_count(self) -> int:
         """Return the number of slides."""
         return len(self.presentation.slides)
+
+    def _extract_images_from_shape(
+        self,
+        shape,
+        slide_idx: int,
+        depth: int = 0
+    ) -> Generator[dict, None, None]:
+        """Extract images from a single shape, including nested group shapes.
+
+        Returns dicts with:
+        - slide_number: int
+        - image_id: str (unique identifier)
+        - image_bytes: bytes (raw image data)
+        - content_type: str (e.g., 'image/png')
+        - width: int (in EMUs)
+        - height: int (in EMUs)
+        """
+        shape_id = getattr(shape, 'shape_id', 'unknown')
+
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape) and depth < 10:
+            try:
+                for child_shape in shape.shapes:
+                    yield from self._extract_images_from_shape(child_shape, slide_idx, depth + 1)
+            except Exception as e:
+                logger.debug("group_image_extraction_error", error=str(e), shape_id=shape_id)
+
+        # Handle Picture shapes (embedded images)
+        if isinstance(shape, Picture):
+            try:
+                image = shape.image
+                image_bytes = image.blob
+
+                # Skip very small images (likely icons/decorations)
+                if len(image_bytes) < MIN_IMAGE_SIZE_BYTES:
+                    logger.debug(
+                        "image_skipped_too_small",
+                        slide=slide_idx,
+                        shape_id=shape_id,
+                        size=len(image_bytes),
+                    )
+                    return
+
+                # Check image dimensions
+                width = shape.width
+                height = shape.height
+                # EMUs to pixels (approx): 914400 EMUs = 1 inch, 96 DPI
+                width_px = int(width / 914400 * 96) if width else 0
+                height_px = int(height / 914400 * 96) if height else 0
+
+                if width_px < MIN_IMAGE_DIMENSION or height_px < MIN_IMAGE_DIMENSION:
+                    logger.debug(
+                        "image_skipped_small_dimensions",
+                        slide=slide_idx,
+                        shape_id=shape_id,
+                        width_px=width_px,
+                        height_px=height_px,
+                    )
+                    return
+
+                # Generate unique image ID
+                image_id = f"slide_{slide_idx}_shape_{shape_id}"
+
+                yield {
+                    "slide_number": slide_idx,
+                    "image_id": image_id,
+                    "image_bytes": image_bytes,
+                    "content_type": image.content_type,
+                    "width": width,
+                    "height": height,
+                    "width_px": width_px,
+                    "height_px": height_px,
+                }
+
+                logger.debug(
+                    "image_extracted",
+                    slide=slide_idx,
+                    shape_id=shape_id,
+                    content_type=image.content_type,
+                    size_bytes=len(image_bytes),
+                    width_px=width_px,
+                    height_px=height_px,
+                )
+
+            except Exception as e:
+                logger.debug("image_extraction_error", error=str(e), shape_id=shape_id)
+
+        # Handle shapes with fill patterns that might contain images
+        # (e.g., shapes filled with a picture)
+        try:
+            if hasattr(shape, 'fill') and shape.fill is not None:
+                fill = shape.fill
+                if hasattr(fill, 'type') and fill.type == MSO_SHAPE_TYPE.PICTURE:
+                    # Shape is filled with a picture
+                    if hasattr(fill, 'picture') and fill.picture is not None:
+                        logger.debug(
+                            "picture_fill_found",
+                            slide=slide_idx,
+                            shape_id=shape_id,
+                        )
+                        # Note: Extracting picture from fill is more complex
+                        # and may not always be possible with python-pptx
+        except Exception as e:
+            logger.debug("fill_check_error", error=str(e), shape_id=shape_id)
+
+    def extract_images(self) -> Generator[dict, None, None]:
+        """Extract all images from the presentation.
+
+        Yields dicts with image info including:
+        - slide_number
+        - image_id
+        - image_bytes
+        - content_type
+        - dimensions
+        """
+        for slide_idx, slide in enumerate(self.presentation.slides, 1):
+            for shape in slide.shapes:
+                yield from self._extract_images_from_shape(shape, slide_idx)
+
+    def get_all_images(self) -> list[dict]:
+        """Get all images as a list."""
+        return list(self.extract_images())
+
+    def get_images_by_slide(self) -> dict[int, list[dict]]:
+        """Get images grouped by slide number.
+
+        Returns dict mapping slide_number -> list of image dicts
+        """
+        images_by_slide: dict[int, list[dict]] = {}
+
+        for image_info in self.extract_images():
+            slide_num = image_info["slide_number"]
+
+            if slide_num not in images_by_slide:
+                images_by_slide[slide_num] = []
+
+            images_by_slide[slide_num].append(image_info)
+
+        # Log summary
+        total_images = sum(len(imgs) for imgs in images_by_slide.values())
+        for slide_num, images in sorted(images_by_slide.items()):
+            logger.info(
+                "slide_images_summary",
+                slide=slide_num,
+                image_count=len(images),
+            )
+
+        logger.info(
+            "image_extraction_complete",
+            total_slides_with_images=len(images_by_slide),
+            total_images=total_images,
+        )
+
+        return images_by_slide
+
+    def _find_shape_by_id(self, slide, shape_id: int, depth: int = 0):
+        """Find a shape by its ID, including in group shapes."""
+        for shape in slide.shapes:
+            if getattr(shape, 'shape_id', None) == shape_id:
+                return shape
+            # Search in group shapes
+            if isinstance(shape, GroupShape) and depth < 10:
+                for child in shape.shapes:
+                    if getattr(child, 'shape_id', None) == shape_id:
+                        return child
+        return None
+
+    def apply_ocr_overlays(
+        self,
+        overlays: list[OCRTextOverlay],
+        output_path: str,
+        target_font: str = "Arial",
+    ) -> tuple[str, int]:
+        """
+        Apply translated text overlays on top of images.
+
+        Creates semi-transparent text boxes positioned over the original
+        image locations where OCR detected text.
+
+        Args:
+            overlays: List of OCRTextOverlay objects with position and text info
+            output_path: Path to save the modified presentation
+            target_font: Font to use for overlay text
+
+        Returns:
+            Tuple of (output_path, number of overlays applied)
+        """
+        if not overlays:
+            self.presentation.save(output_path)
+            return output_path, 0
+
+        applied_count = 0
+
+        # Group overlays by slide
+        overlays_by_slide: dict[int, list[OCRTextOverlay]] = {}
+        for overlay in overlays:
+            if overlay.slide_number not in overlays_by_slide:
+                overlays_by_slide[overlay.slide_number] = []
+            overlays_by_slide[overlay.slide_number].append(overlay)
+
+        for slide_idx, slide in enumerate(self.presentation.slides, 1):
+            if slide_idx not in overlays_by_slide:
+                continue
+
+            slide_overlays = overlays_by_slide[slide_idx]
+
+            for overlay in slide_overlays:
+                try:
+                    # Find the image shape
+                    image_shape = self._find_shape_by_id(slide, overlay.shape_id)
+                    if not image_shape:
+                        logger.warning(
+                            "ocr_overlay_shape_not_found",
+                            slide=slide_idx,
+                            shape_id=overlay.shape_id,
+                        )
+                        continue
+
+                    # Get image position and size
+                    img_left = image_shape.left
+                    img_top = image_shape.top
+                    img_width = image_shape.width
+                    img_height = image_shape.height
+
+                    # Calculate text box position from bbox percentages
+                    # bbox = (x%, y%, width%, height%)
+                    x_pct, y_pct, w_pct, h_pct = overlay.bbox
+
+                    # Convert percentages to EMUs
+                    text_left = img_left + int(img_width * x_pct / 100)
+                    text_top = img_top + int(img_height * y_pct / 100)
+                    text_width = int(img_width * w_pct / 100)
+                    text_height = int(img_height * h_pct / 100)
+
+                    # Ensure minimum size
+                    min_size = Emu(Pt(20).emu)  # Minimum 20pt
+                    text_width = max(text_width, min_size)
+                    text_height = max(text_height, min_size)
+
+                    # Add text box
+                    textbox = slide.shapes.add_textbox(
+                        text_left, text_top, text_width, text_height
+                    )
+                    tf = textbox.text_frame
+                    tf.word_wrap = True
+
+                    # Set text frame properties
+                    tf.margin_left = Pt(2)
+                    tf.margin_right = Pt(2)
+                    tf.margin_top = Pt(1)
+                    tf.margin_bottom = Pt(1)
+
+                    # Add paragraph with translated text
+                    p = tf.paragraphs[0]
+                    p.text = overlay.translated_text
+                    p.alignment = PP_ALIGN.LEFT
+
+                    # Style the text
+                    for run in p.runs:
+                        run.font.name = target_font
+                        font_size = FONT_SIZE_MAP.get(overlay.font_size_hint, 12)
+                        run.font.size = Pt(font_size)
+                        run.font.color.rgb = RGBColor(0, 0, 0)  # Black text
+
+                    # Add semi-transparent white background to text box
+                    # This makes the translated text readable over the image
+                    fill = textbox.fill
+                    fill.solid()
+                    fill.fore_color.rgb = RGBColor(255, 255, 255)
+
+                    # Set transparency (requires accessing XML directly)
+                    # 70% opacity (30% transparent)
+                    try:
+                        spPr = textbox._sp.spPr
+                        solidFill = spPr.find(qn('a:solidFill'))
+                        if solidFill is not None:
+                            srgbClr = solidFill.find(qn('a:srgbClr'))
+                            if srgbClr is not None:
+                                from lxml import etree
+                                alpha = etree.SubElement(srgbClr, qn('a:alpha'))
+                                alpha.set('val', '70000')  # 70% opacity
+                    except Exception as e:
+                        logger.debug("transparency_set_failed", error=str(e))
+
+                    # Add thin border
+                    line = textbox.line
+                    line.color.rgb = RGBColor(100, 100, 100)
+                    line.width = Pt(0.5)
+
+                    applied_count += 1
+
+                    logger.info(
+                        "ocr_overlay_applied",
+                        slide=slide_idx,
+                        shape_id=overlay.shape_id,
+                        text_preview=overlay.translated_text[:30],
+                        bbox=overlay.bbox,
+                        font_size=overlay.font_size_hint,
+                    )
+
+                except Exception as e:
+                    logger.error(
+                        "ocr_overlay_failed",
+                        slide=slide_idx,
+                        shape_id=overlay.shape_id,
+                        error=str(e),
+                    )
+
+        self.presentation.save(output_path)
+
+        logger.info(
+            "ocr_overlays_complete",
+            total_overlays=len(overlays),
+            applied=applied_count,
+        )
+
+        return output_path, applied_count
 
     def _calculate_font_size_ratio(self, original: str, translated: str) -> float:
         """Calculate font size ratio based on text length difference.
