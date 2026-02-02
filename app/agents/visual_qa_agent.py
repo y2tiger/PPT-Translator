@@ -89,13 +89,21 @@ def map_issue_to_adjustments(issue: VisualIssue) -> list[FormatAdjustment]:
             target_value="decrease",
             priority=2
         ))
-        # Action 3: Request shorter translation if still overflowing
+        # Action 3: Disable word wrap to prevent unwanted line breaks
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="word_wrap",
+            target_value="disable",
+            priority=3
+        ))
+        # Action 4: Request shorter translation if still overflowing
         adjustments.append(FormatAdjustment(
             slide_number=issue.slide_number,
             text=issue.original_text,
             adjustment_type="retranslate",
             target_value="shorter",
-            priority=3
+            priority=4
         ))
 
     elif issue.issue_type == "truncation":
