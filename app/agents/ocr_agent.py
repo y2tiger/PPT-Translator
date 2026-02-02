@@ -218,6 +218,13 @@ If truly NO text exists, return: {{"text": "", "confidence": 0.95, "language": "
 
             result_text = response.choices[0].message.content.strip()
 
+            # Log raw response for debugging
+            logger.warning(
+                "ocr_raw_response",
+                response_length=len(result_text),
+                response_preview=result_text[:200] if result_text else "EMPTY",
+            )
+
             # Extract JSON from response (may be wrapped in ```json blocks)
             if "```" in result_text:
                 import re
