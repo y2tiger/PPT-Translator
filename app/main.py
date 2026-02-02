@@ -457,12 +457,17 @@ async def process_translation(
                                     text_length=len(ocr_result.text),
                                 )
                             else:
-                                logger.debug(
-                                    "ocr_no_text_or_low_confidence",
+                                # Log skipped images at WARNING level for debugging
+                                logger.warning(
+                                    "ocr_image_skipped",
                                     file_id=file_id,
+                                    slide=slide_num,
                                     image_id=image_id,
+                                    reason="no_text_or_low_confidence",
                                     has_text=bool(ocr_result.text),
+                                    text_preview=ocr_result.text[:50] if ocr_result.text else "",
                                     confidence=ocr_result.confidence_score,
+                                    threshold=OCR_CONFIDENCE_THRESHOLD,
                                 )
 
                     logger.warning(

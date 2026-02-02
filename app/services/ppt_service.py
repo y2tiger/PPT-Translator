@@ -320,11 +320,12 @@ class PPTService:
 
                 # Skip very small images (likely icons/decorations)
                 if len(image_bytes) < MIN_IMAGE_SIZE_BYTES:
-                    logger.debug(
+                    logger.warning(
                         "image_skipped_too_small",
                         slide=slide_idx,
                         shape_id=shape_id,
-                        size=len(image_bytes),
+                        size_bytes=len(image_bytes),
+                        min_required=MIN_IMAGE_SIZE_BYTES,
                     )
                     return
 
@@ -336,12 +337,13 @@ class PPTService:
                 height_px = int(height / 914400 * 96) if height else 0
 
                 if width_px < MIN_IMAGE_DIMENSION or height_px < MIN_IMAGE_DIMENSION:
-                    logger.debug(
+                    logger.warning(
                         "image_skipped_small_dimensions",
                         slide=slide_idx,
                         shape_id=shape_id,
                         width_px=width_px,
                         height_px=height_px,
+                        min_required=MIN_IMAGE_DIMENSION,
                     )
                     return
 
@@ -461,8 +463,9 @@ class PPTService:
         """
         Apply translated text overlays on top of images.
 
-        Creates semi-transparent text boxes positioned over the original
-        image locations where OCR detected text.
+        Creates individual text boxes for each OCR text block,
+        positioned based on bbox coordinates from OCR.
+        Uses fully opaque white background to cover original text.
 
         Args:
             overlays: List of OCRTextOverlay objects with position and text info
@@ -520,9 +523,10 @@ class PPTService:
                     text_height = int(img_height * h_pct / 100)
 
                     # Ensure minimum size
-                    min_size = Emu(Pt(20).emu)  # Minimum 20pt
-                    text_width = max(text_width, min_size)
-                    text_height = max(text_height, min_size)
+                    min_width = Pt(50).emu
+                    min_height = Pt(16).emu
+                    text_width = max(text_width, min_width)
+                    text_height = max(text_height, min_height)
 
                     # Add text box
                     textbox = slide.shapes.add_textbox(
@@ -530,8 +534,9 @@ class PPTService:
                     )
                     tf = textbox.text_frame
                     tf.word_wrap = True
+                    tf.auto_size = MSO_AUTO_SIZE.NONE
 
-                    # Set text frame properties
+                    # Set text frame properties - tight margins
                     tf.margin_left = Pt(2)
                     tf.margin_right = Pt(2)
                     tf.margin_top = Pt(1)
@@ -543,40 +548,23 @@ class PPTService:
                     p.alignment = PP_ALIGN.LEFT
 
                     # Style the text
+                    font_size = FONT_SIZE_MAP.get(overlay.font_size_hint, 10)
                     for run in p.runs:
                         run.font.name = target_font
-                        font_size = FONT_SIZE_MAP.get(overlay.font_size_hint, 12)
                         run.font.size = Pt(font_size)
                         run.font.color.rgb = RGBColor(0, 0, 0)  # Black text
 
-                    # Add semi-transparent white background to text box
-                    # This makes the translated text readable over the image
+                    # Fully opaque white background (no transparency)
                     fill = textbox.fill
                     fill.solid()
                     fill.fore_color.rgb = RGBColor(255, 255, 255)
 
-                    # Set transparency (requires accessing XML directly)
-                    # 70% opacity (30% transparent)
-                    try:
-                        spPr = textbox._sp.spPr
-                        solidFill = spPr.find(qn('a:solidFill'))
-                        if solidFill is not None:
-                            srgbClr = solidFill.find(qn('a:srgbClr'))
-                            if srgbClr is not None:
-                                from lxml import etree
-                                alpha = etree.SubElement(srgbClr, qn('a:alpha'))
-                                alpha.set('val', '70000')  # 70% opacity
-                    except Exception as e:
-                        logger.debug("transparency_set_failed", error=str(e))
-
-                    # Add thin border
-                    line = textbox.line
-                    line.color.rgb = RGBColor(100, 100, 100)
-                    line.width = Pt(0.5)
+                    # No border for cleaner look
+                    textbox.line.fill.background()
 
                     applied_count += 1
 
-                    logger.info(
+                    logger.debug(
                         "ocr_overlay_applied",
                         slide=slide_idx,
                         shape_id=overlay.shape_id,
