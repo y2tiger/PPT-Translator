@@ -142,21 +142,23 @@ class OCRAgent:
                 confidence_score=1.0,  # High confidence there's no text
             )
 
-        try:
-            image_b64 = self._image_to_base64(image_bytes)
-            mime_type = self._detect_image_type(image_bytes)
+        image_b64 = self._image_to_base64(image_bytes)
+        mime_type = self._detect_image_type(image_bytes)
 
-            # Build prompt based on context
-            lang_hint = ""
-            if source_lang:
-                lang_name = LANGUAGE_NAMES.get(source_lang, str(source_lang))
-                lang_hint = f"The text is expected to be in {lang_name}. "
+        # Build prompt based on context
+        lang_hint = ""
+        if source_lang:
+            lang_name = LANGUAGE_NAMES.get(source_lang, str(source_lang))
+            lang_hint = f"The text is expected to be in {lang_name}. "
 
-            context_hint = ""
-            if context:
-                context_hint = f"This image is from: {context}. "
+        context_hint = ""
+        if context:
+            context_hint = f"This image is from: {context}. "
 
-            prompt = f"""You are an OCR expert. Extract ALL text visible in this image. {lang_hint}{context_hint}
+        # Try up to 2 times with different prompts
+        prompts = [
+            # First attempt: standard prompt
+            f"""You are an OCR expert. Extract ALL text visible in this image. {lang_hint}{context_hint}
 
 CRITICAL: Look VERY carefully for ANY text, including:
 - Labels on charts, graphs, diagrams
@@ -193,115 +195,168 @@ Return ONLY valid JSON:
 bbox: [x, y, width, height] as percentages 0-100 of image size
 font_size: "small", "medium", or "large"
 
-If truly NO text exists, return: {{"text": "", "confidence": 0.95, "language": "unknown", "blocks": []}}"""
+If truly NO text exists, return: {{"text": "", "confidence": 0.95, "language": "unknown", "blocks": []}}""",
 
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                max_tokens=2000,
-                timeout=60.0,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{mime_type};base64,{image_b64}",
-                                    "detail": "high"  # High detail for text extraction
+            # Second attempt: more aggressive prompt for tables/charts
+            f"""IMPORTANT: This image likely contains a TABLE or CHART with text. {lang_hint}{context_hint}
+
+Please look VERY carefully at this image. I believe there IS text in it.
+
+Check these areas:
+1. Table headers and cells (구 분, Hotmelt, Urethane, Silicon, etc.)
+2. Row labels (80℃, 25℃, Blank, 내열성, etc.)
+3. Data values (박리 없음, PP박리 100%, 숫자%, etc.)
+4. Chart labels, axis labels, legends
+5. ANY Korean or English text anywhere
+
+Extract ALL text you can find, even if partially visible.
+
+Return ONLY valid JSON:
+{{
+  "text": "All text found",
+  "confidence": 0.95,
+  "language": "ko",
+  "blocks": [
+    {{"text": "text content", "bbox": [10, 20, 30, 15], "confidence": 0.9, "font_size": "medium"}}
+  ]
+}}
+
+If truly NO text after careful inspection: {{"text": "", "confidence": 0.95, "language": "unknown", "blocks": []}}"""
+        ]
+
+        for attempt, prompt in enumerate(prompts):
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    max_tokens=2000,
+                    timeout=60.0,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:{mime_type};base64,{image_b64}",
+                                        "detail": "high"
+                                    }
                                 }
-                            }
-                        ]
-                    }
-                ]
-            )
+                            ]
+                        }
+                    ]
+                )
 
-            result_text = response.choices[0].message.content.strip()
+                result_text = response.choices[0].message.content.strip()
 
-            # Log raw response for debugging
-            logger.warning(
-                "ocr_raw_response",
-                response_length=len(result_text),
-                response_preview=result_text[:200] if result_text else "EMPTY",
-            )
+                # Log raw response for debugging
+                logger.warning(
+                    "ocr_raw_response",
+                    attempt=attempt + 1,
+                    response_length=len(result_text),
+                    response_preview=result_text[:200] if result_text else "EMPTY",
+                )
 
-            # Extract JSON from response (may be wrapped in ```json blocks)
-            if "```" in result_text:
-                import re
-                json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', result_text)
-                if json_match:
-                    result_text = json_match.group(1)
+                # Extract JSON from response (may be wrapped in ```json blocks)
+                if "```" in result_text:
+                    import re
+                    json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', result_text)
+                    if json_match:
+                        result_text = json_match.group(1)
 
-            result = json.loads(result_text)
+                result = json.loads(result_text)
 
-            # Parse response
-            extracted_text = result.get("text", "").strip()
-            confidence = float(result.get("confidence", 0.8))
-            language = result.get("language", "unknown")
+                # Parse response
+                extracted_text = result.get("text", "").strip()
+                confidence = float(result.get("confidence", 0.8))
+                language = result.get("language", "unknown")
 
-            # Parse blocks if present
-            blocks = []
-            for block_data in result.get("blocks", []):
-                # Parse bbox - can be list or missing
-                bbox_raw = block_data.get("bbox", [0, 0, 100, 100])
-                if isinstance(bbox_raw, (list, tuple)) and len(bbox_raw) >= 4:
-                    bbox = (
-                        float(bbox_raw[0]),  # x%
-                        float(bbox_raw[1]),  # y%
-                        float(bbox_raw[2]),  # width%
-                        float(bbox_raw[3]),  # height%
+                # Parse blocks if present
+                blocks = []
+                for block_data in result.get("blocks", []):
+                    bbox_raw = block_data.get("bbox", [0, 0, 100, 100])
+                    if isinstance(bbox_raw, (list, tuple)) and len(bbox_raw) >= 4:
+                        bbox = (
+                            float(bbox_raw[0]),
+                            float(bbox_raw[1]),
+                            float(bbox_raw[2]),
+                            float(bbox_raw[3]),
+                        )
+                    else:
+                        bbox = (0.0, 0.0, 100.0, 100.0)
+
+                    blocks.append(OCRBlock(
+                        text=block_data.get("text", ""),
+                        bbox=bbox,
+                        confidence=float(block_data.get("confidence", confidence)),
+                        font_size_hint=block_data.get("font_size", "medium"),
+                    ))
+
+                # If text was found, return immediately
+                if extracted_text or blocks:
+                    is_uncertain = confidence < CONFIDENCE_MEDIUM
+                    logger.info(
+                        "ocr_extraction_complete",
+                        attempt=attempt + 1,
+                        text_length=len(extracted_text),
+                        blocks_count=len(blocks),
                     )
-                else:
-                    bbox = (0.0, 0.0, 100.0, 100.0)
+                    return OCRResult(
+                        text=extracted_text,
+                        confidence_score=confidence,
+                        language_guess=language,
+                        blocks=blocks,
+                        is_uncertain=is_uncertain,
+                    )
 
-                blocks.append(OCRBlock(
-                    text=block_data.get("text", ""),
-                    bbox=bbox,
-                    confidence=float(block_data.get("confidence", confidence)),
-                    font_size_hint=block_data.get("font_size", "medium"),
-                ))
+                # No text found, try next prompt (if available)
+                if attempt < len(prompts) - 1:
+                    logger.warning(
+                        "ocr_retry_with_new_prompt",
+                        attempt=attempt + 1,
+                        reason="no_text_found",
+                    )
+                    continue
 
-            # Mark as uncertain if confidence is low
-            is_uncertain = confidence < CONFIDENCE_MEDIUM
+                # Last attempt, return empty result
+                return OCRResult(
+                    text="",
+                    confidence_score=confidence,
+                    language_guess=language,
+                    blocks=[],
+                    is_uncertain=False,
+                )
 
-            logger.info(
-                "ocr_extraction_complete",
-                text_length=len(extracted_text),
-                confidence=round(confidence, 2),
-                language=language,
-                blocks_count=len(blocks),
-                is_uncertain=is_uncertain,
-            )
+            except json.JSONDecodeError as e:
+                logger.error("ocr_json_parse_error", attempt=attempt + 1, error=str(e))
+                if attempt < len(prompts) - 1:
+                    continue
+                return OCRResult(
+                    text="",
+                    confidence_score=0.0,
+                    error=f"Failed to parse OCR response: {str(e)}",
+                )
+            except openai.APIError as e:
+                logger.error("ocr_api_error", attempt=attempt + 1, error=str(e))
+                if attempt < len(prompts) - 1:
+                    continue
+                return OCRResult(
+                    text="",
+                    confidence_score=0.0,
+                    error=f"OCR API error: {str(e)}",
+                )
+            except Exception as e:
+                logger.error("ocr_unexpected_error", attempt=attempt + 1, error=str(e))
+                if attempt < len(prompts) - 1:
+                    continue
+                return OCRResult(
+                    text="",
+                    confidence_score=0.0,
+                    error=f"Unexpected OCR error: {str(e)}",
+                )
 
-            return OCRResult(
-                text=extracted_text,
-                confidence_score=confidence,
-                language_guess=language,
-                blocks=blocks,
-                is_uncertain=is_uncertain,
-            )
-
-        except json.JSONDecodeError as e:
-            logger.error("ocr_json_parse_error", error=str(e))
-            return OCRResult(
-                text="",
-                confidence_score=0.0,
-                error=f"Failed to parse OCR response: {str(e)}",
-            )
-        except openai.APIError as e:
-            logger.error("ocr_api_error", error=str(e))
-            return OCRResult(
-                text="",
-                confidence_score=0.0,
-                error=f"OCR API error: {str(e)}",
-            )
-        except Exception as e:
-            logger.error("ocr_unexpected_error", error=str(e))
-            return OCRResult(
-                text="",
-                confidence_score=0.0,
-                error=f"Unexpected OCR error: {str(e)}",
-            )
+        # Should not reach here, but return empty result just in case
+        return OCRResult(text="", confidence_score=0.0, error="No prompts executed")
 
     async def extract_from_multiple_images(
         self,
