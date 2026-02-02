@@ -1715,3 +1715,133 @@ class PPTService:
                         logger.debug("font_size_individual_error", text=adj_text[:30], error=str(e))
 
         return applied_count
+
+    def add_translation_notes(
+        self,
+        translations: dict[str, str],
+        output_path: str
+    ) -> int:
+        """
+        Add translation notes to each slide showing original -> translated text.
+
+        Args:
+            translations: Dict mapping original text to translated text
+            output_path: Path to save the presentation with notes
+
+        Returns:
+            Number of slides with notes added
+        """
+        slides_with_notes = 0
+
+        for slide_idx, slide in enumerate(self.presentation.slides, 1):
+            # Collect texts from this slide that have translations
+            slide_translations: list[tuple[str, str]] = []
+
+            for shape in slide.shapes:
+                self._collect_translations_from_shape(
+                    shape, translations, slide_translations
+                )
+
+            # Add notes if there are translations for this slide
+            if slide_translations:
+                # Build notes text
+                notes_lines = [f"=== 슬라이드 {slide_idx} 번역 내역 ===", ""]
+
+                for original, translated in slide_translations:
+                    # Clean up text for display
+                    original_clean = original.replace('\n', ' ').strip()
+                    translated_clean = translated.replace('\n', ' ').strip()
+
+                    # Truncate if too long
+                    if len(original_clean) > 100:
+                        original_clean = original_clean[:100] + "..."
+                    if len(translated_clean) > 100:
+                        translated_clean = translated_clean[:100] + "..."
+
+                    notes_lines.append(f"• {original_clean}")
+                    notes_lines.append(f"  → {translated_clean}")
+                    notes_lines.append("")
+
+                notes_text = "\n".join(notes_lines)
+
+                # Add to slide notes
+                try:
+                    notes_slide = slide.notes_slide
+                    notes_frame = notes_slide.notes_text_frame
+
+                    # Append to existing notes or create new
+                    if notes_frame.text.strip():
+                        notes_frame.text = notes_frame.text + "\n\n" + notes_text
+                    else:
+                        notes_frame.text = notes_text
+
+                    slides_with_notes += 1
+                    logger.debug(
+                        "translation_notes_added",
+                        slide=slide_idx,
+                        translation_count=len(slide_translations),
+                    )
+                except Exception as e:
+                    logger.debug("notes_add_error", slide=slide_idx, error=str(e))
+
+        self.presentation.save(output_path)
+
+        logger.info(
+            "translation_notes_complete",
+            slides_with_notes=slides_with_notes,
+            total_slides=len(self.presentation.slides),
+        )
+
+        return slides_with_notes
+
+    def _collect_translations_from_shape(
+        self,
+        shape,
+        translations: dict[str, str],
+        slide_translations: list[tuple[str, str]],
+        depth: int = 0
+    ):
+        """Recursively collect translations from a shape and its children."""
+        if depth > 10:
+            return
+
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape):
+            try:
+                for child_shape in shape.shapes:
+                    self._collect_translations_from_shape(
+                        child_shape, translations, slide_translations, depth + 1
+                    )
+            except Exception:
+                pass
+
+        # Handle text frames
+        if hasattr(shape, 'has_text_frame') and shape.has_text_frame:
+            try:
+                for paragraph in shape.text_frame.paragraphs:
+                    para_text = paragraph.text.strip()
+                    if para_text:
+                        # Check if this text was translated (check original)
+                        for original, translated in translations.items():
+                            if original.strip() == para_text or translated.strip() == para_text:
+                                # Avoid duplicates
+                                if (original, translated) not in slide_translations:
+                                    slide_translations.append((original, translated))
+                                break
+            except Exception:
+                pass
+
+        # Handle tables
+        if hasattr(shape, 'has_table') and shape.has_table:
+            try:
+                for row in shape.table.rows:
+                    for cell in row.cells:
+                        cell_text = cell.text.strip()
+                        if cell_text:
+                            for original, translated in translations.items():
+                                if original.strip() == cell_text or translated.strip() == cell_text:
+                                    if (original, translated) not in slide_translations:
+                                        slide_translations.append((original, translated))
+                                    break
+            except Exception:
+                pass
