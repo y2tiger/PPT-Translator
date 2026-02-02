@@ -1732,6 +1732,7 @@ class PPTService:
             Number of slides with notes added
         """
         slides_with_notes = 0
+        seen_originals: set = set()  # Track which translations have been matched
 
         for slide_idx, slide in enumerate(self.presentation.slides, 1):
             # Collect texts from this slide that have translations
@@ -1739,7 +1740,7 @@ class PPTService:
 
             for shape in slide.shapes:
                 self._collect_translations_from_shape(
-                    shape, translations, slide_translations
+                    shape, translations, slide_translations, seen_originals
                 )
 
             # Add notes if there are translations for this slide
@@ -1794,11 +1795,18 @@ class PPTService:
 
         return slides_with_notes
 
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for comparison by removing extra whitespace."""
+        import re
+        # Replace multiple whitespace with single space
+        return re.sub(r'\s+', ' ', text.strip().lower())
+
     def _collect_translations_from_shape(
         self,
         shape,
         translations: dict[str, str],
         slide_translations: list[tuple[str, str]],
+        seen_originals: set,
         depth: int = 0
     ):
         """Recursively collect translations from a shape and its children."""
@@ -1810,7 +1818,7 @@ class PPTService:
             try:
                 for child_shape in shape.shapes:
                     self._collect_translations_from_shape(
-                        child_shape, translations, slide_translations, depth + 1
+                        child_shape, translations, slide_translations, seen_originals, depth + 1
                     )
             except Exception:
                 pass
@@ -1820,13 +1828,41 @@ class PPTService:
             try:
                 for paragraph in shape.text_frame.paragraphs:
                     para_text = paragraph.text.strip()
-                    if para_text:
-                        # Check if this text was translated (check original)
+                    if para_text and len(para_text) > 1:
+                        para_normalized = self._normalize_text(para_text)
+
                         for original, translated in translations.items():
-                            if original.strip() == para_text or translated.strip() == para_text:
-                                # Avoid duplicates
-                                if (original, translated) not in slide_translations:
-                                    slide_translations.append((original, translated))
+                            # Skip already found
+                            if original in seen_originals:
+                                continue
+
+                            orig_clean = original.strip()
+                            trans_clean = translated.strip()
+
+                            # Skip if original equals translated (no actual translation)
+                            if orig_clean == trans_clean:
+                                continue
+
+                            orig_normalized = self._normalize_text(orig_clean)
+                            trans_normalized = self._normalize_text(trans_clean)
+
+                            # Match if (using normalized comparison):
+                            # 1. Exact match with original or translated
+                            # 2. Para text contains translated (PPT has translated text)
+                            # 3. Translated contains para text (partial match)
+                            # 4. Original contains para text (for split texts)
+                            matched = (
+                                orig_normalized == para_normalized or
+                                trans_normalized == para_normalized or
+                                (len(trans_normalized) > 3 and trans_normalized in para_normalized) or
+                                (len(para_normalized) > 3 and para_normalized in trans_normalized) or
+                                (len(orig_normalized) > 3 and orig_normalized in para_normalized) or
+                                (len(para_normalized) > 3 and para_normalized in orig_normalized)
+                            )
+
+                            if matched:
+                                seen_originals.add(original)
+                                slide_translations.append((original, translated))
                                 break
             except Exception:
                 pass
@@ -1837,11 +1873,34 @@ class PPTService:
                 for row in shape.table.rows:
                     for cell in row.cells:
                         cell_text = cell.text.strip()
-                        if cell_text:
+                        if cell_text and len(cell_text) > 1:
+                            cell_normalized = self._normalize_text(cell_text)
+
                             for original, translated in translations.items():
-                                if original.strip() == cell_text or translated.strip() == cell_text:
-                                    if (original, translated) not in slide_translations:
-                                        slide_translations.append((original, translated))
+                                if original in seen_originals:
+                                    continue
+
+                                orig_clean = original.strip()
+                                trans_clean = translated.strip()
+
+                                if orig_clean == trans_clean:
+                                    continue
+
+                                orig_normalized = self._normalize_text(orig_clean)
+                                trans_normalized = self._normalize_text(trans_clean)
+
+                                matched = (
+                                    orig_normalized == cell_normalized or
+                                    trans_normalized == cell_normalized or
+                                    (len(trans_normalized) > 3 and trans_normalized in cell_normalized) or
+                                    (len(cell_normalized) > 3 and cell_normalized in trans_normalized) or
+                                    (len(orig_normalized) > 3 and orig_normalized in cell_normalized) or
+                                    (len(cell_normalized) > 3 and cell_normalized in orig_normalized)
+                                )
+
+                                if matched:
+                                    seen_originals.add(original)
+                                    slide_translations.append((original, translated))
                                     break
             except Exception:
                 pass
