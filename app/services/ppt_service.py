@@ -1,11 +1,19 @@
+import io
 import structlog
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
+from pptx.shapes.picture import Picture
 from pptx.util import Pt
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN, MSO_AUTO_SIZE
+from pptx.enum.shapes import MSO_SHAPE_TYPE
 from typing import Generator
 
 logger = structlog.get_logger(__name__)
+
+
+# Minimum image size for OCR (skip tiny icons/decorations)
+MIN_IMAGE_SIZE_BYTES = 1000  # 1KB minimum
+MIN_IMAGE_DIMENSION = 50     # 50px minimum width/height
 
 
 def _reset_character_spacing(run):
@@ -255,6 +263,160 @@ class PPTService:
     def get_slide_count(self) -> int:
         """Return the number of slides."""
         return len(self.presentation.slides)
+
+    def _extract_images_from_shape(
+        self,
+        shape,
+        slide_idx: int,
+        depth: int = 0
+    ) -> Generator[dict, None, None]:
+        """Extract images from a single shape, including nested group shapes.
+
+        Returns dicts with:
+        - slide_number: int
+        - image_id: str (unique identifier)
+        - image_bytes: bytes (raw image data)
+        - content_type: str (e.g., 'image/png')
+        - width: int (in EMUs)
+        - height: int (in EMUs)
+        """
+        shape_id = getattr(shape, 'shape_id', 'unknown')
+
+        # Handle group shapes recursively
+        if isinstance(shape, GroupShape) and depth < 10:
+            try:
+                for child_shape in shape.shapes:
+                    yield from self._extract_images_from_shape(child_shape, slide_idx, depth + 1)
+            except Exception as e:
+                logger.debug("group_image_extraction_error", error=str(e), shape_id=shape_id)
+
+        # Handle Picture shapes (embedded images)
+        if isinstance(shape, Picture):
+            try:
+                image = shape.image
+                image_bytes = image.blob
+
+                # Skip very small images (likely icons/decorations)
+                if len(image_bytes) < MIN_IMAGE_SIZE_BYTES:
+                    logger.debug(
+                        "image_skipped_too_small",
+                        slide=slide_idx,
+                        shape_id=shape_id,
+                        size=len(image_bytes),
+                    )
+                    return
+
+                # Check image dimensions
+                width = shape.width
+                height = shape.height
+                # EMUs to pixels (approx): 914400 EMUs = 1 inch, 96 DPI
+                width_px = int(width / 914400 * 96) if width else 0
+                height_px = int(height / 914400 * 96) if height else 0
+
+                if width_px < MIN_IMAGE_DIMENSION or height_px < MIN_IMAGE_DIMENSION:
+                    logger.debug(
+                        "image_skipped_small_dimensions",
+                        slide=slide_idx,
+                        shape_id=shape_id,
+                        width_px=width_px,
+                        height_px=height_px,
+                    )
+                    return
+
+                # Generate unique image ID
+                image_id = f"slide_{slide_idx}_shape_{shape_id}"
+
+                yield {
+                    "slide_number": slide_idx,
+                    "image_id": image_id,
+                    "image_bytes": image_bytes,
+                    "content_type": image.content_type,
+                    "width": width,
+                    "height": height,
+                    "width_px": width_px,
+                    "height_px": height_px,
+                }
+
+                logger.debug(
+                    "image_extracted",
+                    slide=slide_idx,
+                    shape_id=shape_id,
+                    content_type=image.content_type,
+                    size_bytes=len(image_bytes),
+                    width_px=width_px,
+                    height_px=height_px,
+                )
+
+            except Exception as e:
+                logger.debug("image_extraction_error", error=str(e), shape_id=shape_id)
+
+        # Handle shapes with fill patterns that might contain images
+        # (e.g., shapes filled with a picture)
+        try:
+            if hasattr(shape, 'fill') and shape.fill is not None:
+                fill = shape.fill
+                if hasattr(fill, 'type') and fill.type == MSO_SHAPE_TYPE.PICTURE:
+                    # Shape is filled with a picture
+                    if hasattr(fill, 'picture') and fill.picture is not None:
+                        logger.debug(
+                            "picture_fill_found",
+                            slide=slide_idx,
+                            shape_id=shape_id,
+                        )
+                        # Note: Extracting picture from fill is more complex
+                        # and may not always be possible with python-pptx
+        except Exception as e:
+            logger.debug("fill_check_error", error=str(e), shape_id=shape_id)
+
+    def extract_images(self) -> Generator[dict, None, None]:
+        """Extract all images from the presentation.
+
+        Yields dicts with image info including:
+        - slide_number
+        - image_id
+        - image_bytes
+        - content_type
+        - dimensions
+        """
+        for slide_idx, slide in enumerate(self.presentation.slides, 1):
+            for shape in slide.shapes:
+                yield from self._extract_images_from_shape(shape, slide_idx)
+
+    def get_all_images(self) -> list[dict]:
+        """Get all images as a list."""
+        return list(self.extract_images())
+
+    def get_images_by_slide(self) -> dict[int, list[dict]]:
+        """Get images grouped by slide number.
+
+        Returns dict mapping slide_number -> list of image dicts
+        """
+        images_by_slide: dict[int, list[dict]] = {}
+
+        for image_info in self.extract_images():
+            slide_num = image_info["slide_number"]
+
+            if slide_num not in images_by_slide:
+                images_by_slide[slide_num] = []
+
+            images_by_slide[slide_num].append(image_info)
+
+        # Log summary
+        total_images = sum(len(imgs) for imgs in images_by_slide.values())
+        for slide_num, images in sorted(images_by_slide.items()):
+            logger.info(
+                "slide_images_summary",
+                slide=slide_num,
+                image_count=len(images),
+            )
+
+        logger.info(
+            "image_extraction_complete",
+            total_slides_with_images=len(images_by_slide),
+            total_images=total_images,
+        )
+
+        return images_by_slide
 
     def _calculate_font_size_ratio(self, original: str, translated: str) -> float:
         """Calculate font size ratio based on text length difference.
