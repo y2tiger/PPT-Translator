@@ -1050,11 +1050,6 @@ async def process_translation(
             if translated_for_qa.exists():
                 translated_for_qa.unlink()
 
-            # Add translation notes to each slide (after Visual QA)
-            notes_ppt_service = PPTService(str(output_path))
-            notes_ppt_service.add_translation_notes(all_translations, str(output_path))
-            logger.info("translation_notes_added", file_id=file_id)
-
             # Free memory after Visual QA loop
             gc.collect()
             logger.debug("memory_freed_after_visual_qa", file_id=file_id)
@@ -1080,11 +1075,6 @@ async def process_translation(
             # Apply target font if specified
             if target_font:
                 apply_font_to_ppt(str(output_path), str(output_path), target_font)
-
-            # Add translation notes to each slide
-            notes_ppt_service = PPTService(str(output_path))
-            notes_ppt_service.add_translation_notes(all_translations, str(output_path))
-            logger.info("translation_notes_added", file_id=file_id)
 
         # === Apply OCR Text Overlays ===
         # Create text boxes on top of images with translated OCR text
@@ -1148,6 +1138,15 @@ async def process_translation(
                     file_id=file_id,
                     error=str(overlay_error),
                 )
+
+        # === Add Translation Notes ===
+        # Add all translations (including OCR) to slide notes AFTER overlays are applied
+        try:
+            notes_ppt_service = PPTService(str(output_path))
+            notes_ppt_service.add_translation_notes(all_translations, str(output_path))
+            logger.info("translation_notes_added", file_id=file_id, count=len(all_translations))
+        except Exception as notes_error:
+            logger.warning("translation_notes_failed", file_id=file_id, error=str(notes_error))
 
         # Log final summary
         logger.debug(
