@@ -320,11 +320,12 @@ class PPTService:
 
                 # Skip very small images (likely icons/decorations)
                 if len(image_bytes) < MIN_IMAGE_SIZE_BYTES:
-                    logger.debug(
+                    logger.warning(
                         "image_skipped_too_small",
                         slide=slide_idx,
                         shape_id=shape_id,
-                        size=len(image_bytes),
+                        size_bytes=len(image_bytes),
+                        min_required=MIN_IMAGE_SIZE_BYTES,
                     )
                     return
 
@@ -336,12 +337,13 @@ class PPTService:
                 height_px = int(height / 914400 * 96) if height else 0
 
                 if width_px < MIN_IMAGE_DIMENSION or height_px < MIN_IMAGE_DIMENSION:
-                    logger.debug(
+                    logger.warning(
                         "image_skipped_small_dimensions",
                         slide=slide_idx,
                         shape_id=shape_id,
                         width_px=width_px,
                         height_px=height_px,
+                        min_required=MIN_IMAGE_DIMENSION,
                     )
                     return
 
@@ -461,10 +463,9 @@ class PPTService:
         """
         Apply translated text overlays on top of images.
 
-        Creates a SINGLE text box per image containing all translated text,
-        positioned at the bottom of the image. This approach is more reliable
-        than trying to position individual text blocks at specific coordinates,
-        which GPT-4o Vision cannot accurately provide.
+        Creates individual text boxes for each OCR text block,
+        positioned based on bbox coordinates from OCR.
+        Uses fully opaque white background to cover original text.
 
         Args:
             overlays: List of OCRTextOverlay objects with position and text info
@@ -480,168 +481,112 @@ class PPTService:
 
         applied_count = 0
 
-        # Group overlays by slide AND shape_id (one text box per image)
-        overlays_by_image: dict[tuple[int, int], list[OCRTextOverlay]] = {}
+        # Group overlays by slide
+        overlays_by_slide: dict[int, list[OCRTextOverlay]] = {}
         for overlay in overlays:
-            key = (overlay.slide_number, overlay.shape_id)
-            if key not in overlays_by_image:
-                overlays_by_image[key] = []
-            overlays_by_image[key].append(overlay)
+            if overlay.slide_number not in overlays_by_slide:
+                overlays_by_slide[overlay.slide_number] = []
+            overlays_by_slide[overlay.slide_number].append(overlay)
 
-        for (slide_idx, shape_id), image_overlays in overlays_by_image.items():
-            try:
-                # Get the slide (1-indexed)
-                if slide_idx < 1 or slide_idx > len(self.presentation.slides):
-                    logger.warning(
-                        "ocr_overlay_invalid_slide",
-                        slide=slide_idx,
-                        shape_id=shape_id,
-                    )
-                    continue
+        for slide_idx, slide in enumerate(self.presentation.slides, 1):
+            if slide_idx not in overlays_by_slide:
+                continue
 
-                slide = self.presentation.slides[slide_idx - 1]
+            slide_overlays = overlays_by_slide[slide_idx]
 
-                # Find the image shape
-                image_shape = self._find_shape_by_id(slide, shape_id)
-                if not image_shape:
-                    logger.warning(
-                        "ocr_overlay_shape_not_found",
-                        slide=slide_idx,
-                        shape_id=shape_id,
-                    )
-                    continue
-
-                # Get image position and size
-                img_left = image_shape.left
-                img_top = image_shape.top
-                img_width = image_shape.width
-                img_height = image_shape.height
-
-                # Combine all translations for this image
-                # Sort by vertical position (y%) to maintain reading order
-                sorted_overlays = sorted(image_overlays, key=lambda o: o.bbox[1])
-
-                # Build combined text with line breaks
-                translated_lines = []
-                for overlay in sorted_overlays:
-                    if overlay.translated_text.strip():
-                        translated_lines.append(overlay.translated_text.strip())
-
-                if not translated_lines:
-                    continue
-
-                combined_text = "\n".join(translated_lines)
-
-                # Calculate text box size based on content
-                # Estimate: ~10 chars per line, font size 10pt
-                num_lines = len(translated_lines)
-                max_line_len = max(len(line) for line in translated_lines) if translated_lines else 20
-
-                # Font size based on image size and text amount
-                if num_lines <= 3 and max_line_len <= 30:
-                    font_size = 10
-                elif num_lines <= 6:
-                    font_size = 9
-                else:
-                    font_size = 8
-
-                # Calculate text box dimensions
-                char_width = Pt(font_size * 0.6)  # Approximate character width
-                line_height = Pt(font_size * 1.4)  # Line height with spacing
-
-                text_width = min(
-                    int(max_line_len * char_width.emu),
-                    int(img_width * 0.95)  # Max 95% of image width
-                )
-                text_width = max(text_width, Pt(80).emu)  # Min 80pt width
-
-                text_height = min(
-                    int(num_lines * line_height.emu + Pt(10).emu),  # Add padding
-                    int(img_height * 0.5)  # Max 50% of image height
-                )
-                text_height = max(text_height, Pt(20).emu)  # Min 20pt height
-
-                # Position: bottom-center of image, overlapping slightly
-                text_left = img_left + (img_width - text_width) // 2
-                text_top = img_top + img_height - text_height - Pt(5).emu
-
-                # Ensure text box stays within image bounds
-                text_top = max(text_top, img_top)
-
-                # Add text box
-                textbox = slide.shapes.add_textbox(
-                    text_left, text_top, text_width, text_height
-                )
-                tf = textbox.text_frame
-                tf.word_wrap = True
-                tf.auto_size = MSO_AUTO_SIZE.NONE
-
-                # Set text frame properties
-                tf.margin_left = Pt(4)
-                tf.margin_right = Pt(4)
-                tf.margin_top = Pt(2)
-                tf.margin_bottom = Pt(2)
-
-                # Add paragraph with combined translated text
-                p = tf.paragraphs[0]
-                p.text = combined_text
-                p.alignment = PP_ALIGN.CENTER
-
-                # Style the text
-                for run in p.runs:
-                    run.font.name = target_font
-                    run.font.size = Pt(font_size)
-                    run.font.color.rgb = RGBColor(0, 0, 0)  # Black text
-                    run.font.bold = False
-
-                # Add semi-transparent white background
-                fill = textbox.fill
-                fill.solid()
-                fill.fore_color.rgb = RGBColor(255, 255, 255)
-
-                # Set transparency (85% opacity)
+            for overlay in slide_overlays:
                 try:
-                    spPr = textbox._sp.spPr
-                    solidFill = spPr.find(qn('a:solidFill'))
-                    if solidFill is not None:
-                        srgbClr = solidFill.find(qn('a:srgbClr'))
-                        if srgbClr is not None:
-                            from lxml import etree
-                            alpha = etree.SubElement(srgbClr, qn('a:alpha'))
-                            alpha.set('val', '85000')  # 85% opacity
+                    # Find the image shape
+                    image_shape = self._find_shape_by_id(slide, overlay.shape_id)
+                    if not image_shape:
+                        logger.warning(
+                            "ocr_overlay_shape_not_found",
+                            slide=slide_idx,
+                            shape_id=overlay.shape_id,
+                        )
+                        continue
+
+                    # Get image position and size
+                    img_left = image_shape.left
+                    img_top = image_shape.top
+                    img_width = image_shape.width
+                    img_height = image_shape.height
+
+                    # Calculate text box position from bbox percentages
+                    # bbox = (x%, y%, width%, height%)
+                    x_pct, y_pct, w_pct, h_pct = overlay.bbox
+
+                    # Convert percentages to EMUs
+                    text_left = img_left + int(img_width * x_pct / 100)
+                    text_top = img_top + int(img_height * y_pct / 100)
+                    text_width = int(img_width * w_pct / 100)
+                    text_height = int(img_height * h_pct / 100)
+
+                    # Ensure minimum size
+                    min_width = Pt(50).emu
+                    min_height = Pt(16).emu
+                    text_width = max(text_width, min_width)
+                    text_height = max(text_height, min_height)
+
+                    # Add text box
+                    textbox = slide.shapes.add_textbox(
+                        text_left, text_top, text_width, text_height
+                    )
+                    tf = textbox.text_frame
+                    tf.word_wrap = True
+                    tf.auto_size = MSO_AUTO_SIZE.NONE
+
+                    # Set text frame properties - tight margins
+                    tf.margin_left = Pt(2)
+                    tf.margin_right = Pt(2)
+                    tf.margin_top = Pt(1)
+                    tf.margin_bottom = Pt(1)
+
+                    # Add paragraph with translated text
+                    p = tf.paragraphs[0]
+                    p.text = overlay.translated_text
+                    p.alignment = PP_ALIGN.LEFT
+
+                    # Style the text
+                    font_size = FONT_SIZE_MAP.get(overlay.font_size_hint, 10)
+                    for run in p.runs:
+                        run.font.name = target_font
+                        run.font.size = Pt(font_size)
+                        run.font.color.rgb = RGBColor(0, 0, 0)  # Black text
+
+                    # Fully opaque white background (no transparency)
+                    fill = textbox.fill
+                    fill.solid()
+                    fill.fore_color.rgb = RGBColor(255, 255, 255)
+
+                    # No border for cleaner look
+                    textbox.line.fill.background()
+
+                    applied_count += 1
+
+                    logger.debug(
+                        "ocr_overlay_applied",
+                        slide=slide_idx,
+                        shape_id=overlay.shape_id,
+                        text_preview=overlay.translated_text[:30],
+                        bbox=overlay.bbox,
+                        font_size=overlay.font_size_hint,
+                    )
+
                 except Exception as e:
-                    logger.debug("transparency_set_failed", error=str(e))
-
-                # Add thin border
-                line = textbox.line
-                line.color.rgb = RGBColor(80, 80, 80)
-                line.width = Pt(0.75)
-
-                applied_count += 1
-
-                logger.info(
-                    "ocr_overlay_applied",
-                    slide=slide_idx,
-                    shape_id=shape_id,
-                    text_blocks=len(image_overlays),
-                    combined_lines=num_lines,
-                    font_size=font_size,
-                )
-
-            except Exception as e:
-                logger.error(
-                    "ocr_overlay_failed",
-                    slide=slide_idx,
-                    shape_id=shape_id,
-                    error=str(e),
-                )
+                    logger.error(
+                        "ocr_overlay_failed",
+                        slide=slide_idx,
+                        shape_id=overlay.shape_id,
+                        error=str(e),
+                    )
 
         self.presentation.save(output_path)
 
         logger.info(
             "ocr_overlays_complete",
             total_overlays=len(overlays),
-            images_with_overlays=applied_count,
+            applied=applied_count,
         )
 
         return output_path, applied_count
