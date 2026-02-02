@@ -183,15 +183,15 @@ Return ONLY valid JSON:
   "blocks": [
     {{
       "text": "Text content",
-      "bbox": [x%, y%, width%, height%],
+      "bbox": [10, 20, 30, 15],
       "confidence": 0.9,
       "font_size": "medium"
     }}
   ]
 }}
 
-bbox format: [x%, y%, width%, height%] as percentages (0-100)
-font_size: "small" (<5% height), "medium" (5-10%), "large" (>10%)
+bbox: [x, y, width, height] as percentages 0-100 of image size
+font_size: "small", "medium", or "large"
 
 If truly NO text exists, return: {{"text": "", "confidence": 0.95, "language": "unknown", "blocks": []}}"""
 
