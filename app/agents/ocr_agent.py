@@ -156,50 +156,44 @@ class OCRAgent:
             if context:
                 context_hint = f"This image is from: {context}. "
 
-            prompt = f"""Extract ALL text visible in this image WITH their positions. {lang_hint}{context_hint}
+            prompt = f"""You are an OCR expert. Extract ALL text visible in this image. {lang_hint}{context_hint}
+
+CRITICAL: Look VERY carefully for ANY text, including:
+- Labels on charts, graphs, diagrams
+- Axis labels, legends, titles
+- Text in tables or cells
+- Watermarks or logos with text
+- Small captions or footnotes
+- Numbers and units
+- Korean, English, or mixed text
 
 IMPORTANT RULES:
 1. Extract text EXACTLY as it appears (preserve spelling, capitalization)
-2. Identify each separate text block/region in the image
-3. For each block, estimate its position as percentages of image dimensions
-4. Estimate relative font size (small/medium/large based on text height vs image)
-5. Do NOT translate - extract the original text only
-6. If no text is visible, return empty blocks array
+2. Identify each separate text block/region
+3. For each block, estimate position as percentages of image dimensions
+4. Do NOT translate - extract original text only
+5. If you see ANY text at all, include it - even single words or numbers
+6. Look at EVERY part of the image carefully
 
-Return ONLY valid JSON in this exact format:
+Return ONLY valid JSON:
 {{
-  "text": "All text combined here",
+  "text": "All text combined (newline separated)",
   "confidence": 0.95,
   "language": "ko",
   "blocks": [
     {{
-      "text": "First text block",
-      "bbox": [10, 5, 80, 15],
+      "text": "Text content",
+      "bbox": [x%, y%, width%, height%],
       "confidence": 0.9,
-      "font_size": "large"
-    }},
-    {{
-      "text": "Second text block",
-      "bbox": [10, 20, 60, 10],
-      "confidence": 0.85,
       "font_size": "medium"
     }}
   ]
 }}
 
-Where:
-- text: All extracted text combined
-- confidence: Overall accuracy (0.0-1.0)
-- language: Detected language code (ko, en, ja, zh, etc.)
-- blocks: List of text regions with:
-  - text: The text in this region
-  - bbox: [x%, y%, width%, height%] as percentages (0-100) of image size
-    - x%: horizontal position from left edge
-    - y%: vertical position from top edge
-    - width%: width of text region
-    - height%: height of text region
-  - confidence: Confidence for this block
-  - font_size: "small" (< 5% height), "medium" (5-10%), "large" (> 10%)"""
+bbox format: [x%, y%, width%, height%] as percentages (0-100)
+font_size: "small" (<5% height), "medium" (5-10%), "large" (>10%)
+
+If truly NO text exists, return: {{"text": "", "confidence": 0.95, "language": "unknown", "blocks": []}}"""
 
             response = await self.client.chat.completions.create(
                 model=self.model,
