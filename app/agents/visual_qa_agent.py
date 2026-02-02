@@ -73,21 +73,37 @@ def map_issue_to_adjustments(issue: VisualIssue) -> list[FormatAdjustment]:
 
     if issue.issue_type == "overflow" or issue.issue_type == "text_overflow":
         # Overflow: text is too big for container
-        # Action 1: Reduce font size (primary)
+        # Action 1: Enable auto_fit to shrink text (primary - most effective for overflow)
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="auto_fit",
+            target_value="shrink_text",
+            priority=1
+        ))
+        # Action 2: Reduce font size (secondary)
         adjustments.append(FormatAdjustment(
             slide_number=issue.slide_number,
             text=issue.original_text,
             adjustment_type="font_size",
             target_value="decrease",
-            priority=1
+            priority=2
         ))
-        # Action 2: Disable word wrap (secondary) - prevents text box shrinking
+        # Action 3: Disable word wrap to prevent unwanted line breaks
         adjustments.append(FormatAdjustment(
             slide_number=issue.slide_number,
             text=issue.original_text,
             adjustment_type="word_wrap",
             target_value="disable",
-            priority=2
+            priority=3
+        ))
+        # Action 4: Request shorter translation if still overflowing
+        adjustments.append(FormatAdjustment(
+            slide_number=issue.slide_number,
+            text=issue.original_text,
+            adjustment_type="retranslate",
+            target_value="shorter",
+            priority=4
         ))
 
     elif issue.issue_type == "truncation":
