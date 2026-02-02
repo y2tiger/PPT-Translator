@@ -292,6 +292,8 @@ async def process_translation(
     target_font: str | None = None,
     visual_qa_iterations: int = 2,
     translation_style: TranslationStyle = TranslationStyle.TECHNICAL,
+    enable_ocr: bool = True,
+    enable_ocr_retry: bool = False,
 ):
     """Background task for translation processing with slide-based context."""
     logger.info(
@@ -302,6 +304,8 @@ async def process_translation(
         target_font=target_font or DEFAULT_KOREAN_FONT,
         visual_qa_iterations=visual_qa_iterations,
         translation_style=translation_style.value,
+        enable_ocr=enable_ocr,
+        enable_ocr_retry=enable_ocr_retry,
     )
 
     try:
@@ -333,7 +337,7 @@ async def process_translation(
         ocr_blocks_data: list[dict] = []  # Stores {slide, shape_id, block, image_info}
         ocr_summary = ImageTranslationSummary()
 
-        if ENABLE_IMAGE_OCR:
+        if enable_ocr:
             translation_status[file_id] = TranslationStatus(
                 status="processing",
                 progress=5,
@@ -350,13 +354,13 @@ async def process_translation(
                 ocr_summary.total_images = total_images
 
                 if total_images == 0:
-                    logger.warning(
+                    logger.info(
                         "ocr_no_images_found",
                         file_id=file_id,
                         message="No images detected in PPT for OCR",
                     )
                 else:
-                    logger.warning(
+                    logger.info(
                         "ocr_extraction_starting",
                         file_id=file_id,
                         total_images=total_images,
@@ -388,6 +392,7 @@ async def process_translation(
                                 image_bytes=image_bytes,
                                 source_lang=source_lang,
                                 context=f"PowerPoint slide {slide_num}",
+                                enable_retry=enable_ocr_retry,
                             )
 
                             # Process OCR result
@@ -423,7 +428,7 @@ async def process_translation(
                                 if ocr_result.is_uncertain:
                                     ocr_summary.uncertain_extractions += 1
 
-                                logger.warning(
+                                logger.debug(
                                     "ocr_blocks_extracted",
                                     file_id=file_id,
                                     slide=slide_num,
@@ -457,8 +462,8 @@ async def process_translation(
                                     text_length=len(ocr_result.text),
                                 )
                             else:
-                                # Log skipped images at WARNING level for debugging
-                                logger.warning(
+                                # Log skipped images at DEBUG level
+                                logger.debug(
                                     "ocr_image_skipped",
                                     file_id=file_id,
                                     slide=slide_num,
@@ -470,7 +475,7 @@ async def process_translation(
                                     threshold=OCR_CONFIDENCE_THRESHOLD,
                                 )
 
-                    logger.warning(
+                    logger.info(
                         "ocr_extraction_complete",
                         file_id=file_id,
                         total_images=total_images,
@@ -489,7 +494,7 @@ async def process_translation(
                 )
                 # Continue without OCR texts
         else:
-            logger.debug("ocr_disabled", file_id=file_id)
+            logger.info("ocr_disabled_by_user", file_id=file_id)
 
         # Recalculate slides with text (OCR texts already merged above)
         slides_with_text = len(texts_by_slide)
@@ -1213,6 +1218,8 @@ async def start_translation(
     target_font: str = Form("pretendard"),
     visual_qa_iterations: str = Form("2"),
     translation_style: str = Form("technical"),
+    enable_ocr: str = Form("true"),
+    enable_ocr_retry: str = Form("false"),
 ):
     """Start translation process."""
     file_id = validate_file_id(file_id)
@@ -1260,6 +1267,10 @@ async def start_translation(
     except ValueError:
         qa_iterations = 2  # Default
 
+    # Parse OCR options (form sends string "true"/"false")
+    ocr_enabled = enable_ocr.lower() == "true"
+    ocr_retry_enabled = enable_ocr_retry.lower() == "true"
+
     # Start background task
     background_tasks.add_task(
         process_translation,
@@ -1269,9 +1280,11 @@ async def start_translation(
         font_name,
         qa_iterations,
         style,
+        ocr_enabled,
+        ocr_retry_enabled,
     )
 
-    logger.info("translation_queued", file_id=file_id, target_font=target_font, visual_qa_iterations=qa_iterations, style=style.value)
+    logger.info("translation_queued", file_id=file_id, target_font=target_font, visual_qa_iterations=qa_iterations, style=style.value, enable_ocr=ocr_enabled, enable_ocr_retry=ocr_retry_enabled)
     return {"message": "번역이 시작되었습니다", "file_id": file_id}
 
 
