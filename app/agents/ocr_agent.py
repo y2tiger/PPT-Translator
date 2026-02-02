@@ -255,7 +255,7 @@ If truly NO text after careful inspection: {{"text": "", "confidence": 0.95, "la
                 result_text = response.choices[0].message.content.strip()
 
                 # Log raw response for debugging
-                logger.warning(
+                logger.debug(
                     "ocr_raw_response",
                     attempt=attempt + 1,
                     response_length=len(result_text),
@@ -316,7 +316,7 @@ If truly NO text after careful inspection: {{"text": "", "confidence": 0.95, "la
 
                 # No text found, try next prompt (if available)
                 if attempt < len(prompts) - 1:
-                    logger.warning(
+                    logger.debug(
                         "ocr_retry_with_new_prompt",
                         attempt=attempt + 1,
                         reason="no_text_found",

@@ -354,13 +354,13 @@ async def process_translation(
                 ocr_summary.total_images = total_images
 
                 if total_images == 0:
-                    logger.warning(
+                    logger.info(
                         "ocr_no_images_found",
                         file_id=file_id,
                         message="No images detected in PPT for OCR",
                     )
                 else:
-                    logger.warning(
+                    logger.info(
                         "ocr_extraction_starting",
                         file_id=file_id,
                         total_images=total_images,
@@ -428,7 +428,7 @@ async def process_translation(
                                 if ocr_result.is_uncertain:
                                     ocr_summary.uncertain_extractions += 1
 
-                                logger.warning(
+                                logger.debug(
                                     "ocr_blocks_extracted",
                                     file_id=file_id,
                                     slide=slide_num,
@@ -462,8 +462,8 @@ async def process_translation(
                                     text_length=len(ocr_result.text),
                                 )
                             else:
-                                # Log skipped images at WARNING level for debugging
-                                logger.warning(
+                                # Log skipped images at DEBUG level
+                                logger.debug(
                                     "ocr_image_skipped",
                                     file_id=file_id,
                                     slide=slide_num,
@@ -475,7 +475,7 @@ async def process_translation(
                                     threshold=OCR_CONFIDENCE_THRESHOLD,
                                 )
 
-                    logger.warning(
+                    logger.info(
                         "ocr_extraction_complete",
                         file_id=file_id,
                         total_images=total_images,
@@ -494,7 +494,7 @@ async def process_translation(
                 )
                 # Continue without OCR texts
         else:
-            logger.warning("ocr_disabled_by_user", file_id=file_id)
+            logger.info("ocr_disabled_by_user", file_id=file_id)
 
         # Recalculate slides with text (OCR texts already merged above)
         slides_with_text = len(texts_by_slide)
@@ -692,7 +692,7 @@ async def process_translation(
             translated_for_qa = UPLOAD_DIR / f"{file_id}_translated_for_qa.pptx"
 
             for visual_iteration in range(1, max_iterations + 1):
-                logger.warning(
+                logger.info(
                     "visual_qa_iteration_start",
                     file_id=file_id,
                     iteration=visual_iteration,
@@ -930,7 +930,7 @@ async def process_translation(
                                 )
 
                     # Apply format adjustments (alignment, font size) from Visual QA
-                    logger.warning(
+                    logger.debug(
                         "visual_qa_format_adjustments_received",
                         file_id=file_id,
                         iteration=visual_iteration,
@@ -986,7 +986,7 @@ async def process_translation(
                                 "adjustment_type": adj.adjustment_type,
                                 "target_value": adj.target_value,
                             })
-                            logger.warning(
+                            logger.debug(
                                 "format_adjustment_mapped",
                                 slide=adj.slide_number,
                                 original=adj.text[:30] if adj.text else "",
@@ -997,7 +997,7 @@ async def process_translation(
 
                         # Apply adjustments to the translated PPT
                         # IMPORTANT: Load translated_for_qa since it contains the translated text
-                        logger.warning(
+                        logger.debug(
                             "applying_format_adjustments",
                             file_id=file_id,
                             iteration=visual_iteration,
@@ -1012,7 +1012,7 @@ async def process_translation(
                         # Accumulate adjustments for re-application after each translation
                         all_format_adjustments.extend(adjustments_to_apply)
 
-                        logger.warning(
+                        logger.debug(
                             "format_adjustments_result",
                             file_id=file_id,
                             iteration=visual_iteration,
@@ -1022,7 +1022,7 @@ async def process_translation(
 
                         if applied_count > 0:
                             has_work_to_do = True
-                            logger.warning(
+                            logger.info(
                                 "format_adjustments_applied",
                                 file_id=file_id,
                                 iteration=visual_iteration,
@@ -1127,7 +1127,7 @@ async def process_translation(
 
                     ocr_summary.images_translated = overlays_applied
 
-                    logger.warning(
+                    logger.info(
                         "ocr_overlays_applied",
                         file_id=file_id,
                         total_blocks=len(ocr_blocks_data),
