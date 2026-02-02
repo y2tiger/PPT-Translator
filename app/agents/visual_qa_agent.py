@@ -760,7 +760,7 @@ Return as JSON:
                     all_format_adjustments.append(adj)
                     seen_adjustments.add(key)
 
-            logger.warning(
+            logger.debug(
                 "issue_to_adjustment_mapping_complete",
                 iteration=iteration,
                 total_issues=len(all_issues),
@@ -784,28 +784,21 @@ Return as JSON:
                 format_adjustments=all_format_adjustments,
             )
 
-            # Log each format adjustment for debugging (WARNING level to ensure visibility)
+            # Log format adjustments for debugging
             if all_format_adjustments:
-                logger.warning(
+                logger.debug(
                     "format_adjustments_generated",
                     iteration=iteration,
                     count=len(all_format_adjustments),
                     adjustments=[{"slide": a.slide_number, "type": a.adjustment_type, "text": a.text[:30]} for a in all_format_adjustments[:5]],
                 )
-            else:
-                logger.warning(
-                    "no_format_adjustments_generated",
-                    iteration=iteration,
-                    total_slides=processed_slides,
-                )
 
-            logger.warning(
+            logger.info(
                 "visual_qa_complete",
                 iteration=iteration,
                 total_slides=processed_slides,
                 overall_score=overall_score,
                 critical_issues=len(critical_issues),
-                suggestions=len(unique_suggestions),
                 format_adjustments_count=len(all_format_adjustments),
             )
 
