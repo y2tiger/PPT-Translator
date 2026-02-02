@@ -18,14 +18,16 @@ from slowapi.errors import RateLimitExceeded
 from app.models.schemas import (
     Language, TranslationStatus, LANGUAGE_NAMES,
     TranslationStyle, TRANSLATION_STYLE_NAMES, TRANSLATION_STYLE_DESCRIPTIONS,
-    QAHistoryResponse, QAIterationResponse, SlideComparisonResponse, VisualIssueResponse
+    QAHistoryResponse, QAIterationResponse, SlideComparisonResponse, VisualIssueResponse,
+    ImageTranslationSummary,
 )
-from app.services.ppt_service import PPTService
+from app.services.ppt_service import PPTService, OCRTextOverlay
 from app.agents.orchestrator import TranslationOrchestrator
 from app.agents.translator import TranslatorAgent
 from app.agents.qa_agent import QAAgent
 from app.agents.diagnostic_agent import DiagnosticAgent, IssueSeverity
 from app.agents.visual_qa_agent import VisualQAAgent
+from app.agents.ocr_agent import OCRAgent
 from app.utils.font_utils import (
     check_missing_fonts, create_libreoffice_font_substitution,
     get_available_fonts, apply_font_to_ppt, AVAILABLE_FONTS, DEFAULT_KOREAN_FONT
@@ -35,6 +37,10 @@ from app.utils.font_utils import (
 MAX_QA_ITERATIONS = 3
 MAX_VISUAL_ITERATIONS = 2  # Visual comparison iterations
 VISUAL_QA_QUALITY_THRESHOLD = 95  # Score threshold to pass (raised from 85)
+
+# OCR settings
+ENABLE_IMAGE_OCR = os.environ.get("ENABLE_IMAGE_OCR", "true").lower() == "true"
+OCR_CONFIDENCE_THRESHOLD = 0.5  # Minimum confidence to include OCR text
 
 # Set logging level from environment variable (default: WARNING for production)
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "WARNING").upper()
@@ -322,6 +328,167 @@ async def process_translation(
         total_slides = ppt_service.get_slide_count()
         slides_with_text = len(texts_by_slide)
 
+        # === OCR: Extract text from images in slides ===
+        # Store OCR blocks with position info for overlay creation
+        ocr_blocks_data: list[dict] = []  # Stores {slide, shape_id, block, image_info}
+        ocr_summary = ImageTranslationSummary()
+
+        if ENABLE_IMAGE_OCR:
+            translation_status[file_id] = TranslationStatus(
+                status="processing",
+                progress=5,
+                total_slides=total_slides,
+                current_slide=0,
+                review_loop=0,
+                message="이미지에서 텍스트 추출 중 (OCR)...",
+            )
+
+            try:
+                ocr_agent = OCRAgent(api_key)
+                images_by_slide = ppt_service.get_images_by_slide()
+                total_images = sum(len(imgs) for imgs in images_by_slide.values())
+                ocr_summary.total_images = total_images
+
+                if total_images == 0:
+                    logger.warning(
+                        "ocr_no_images_found",
+                        file_id=file_id,
+                        message="No images detected in PPT for OCR",
+                    )
+                else:
+                    logger.warning(
+                        "ocr_extraction_starting",
+                        file_id=file_id,
+                        total_images=total_images,
+                        slides_with_images=len(images_by_slide),
+                    )
+
+                    processed_images = 0
+                    for slide_num, images in images_by_slide.items():
+                        for image_info in images:
+                            processed_images += 1
+                            image_id = image_info["image_id"]
+                            image_bytes = image_info["image_bytes"]
+                            # Extract shape_id from image_id (format: "slide_N_shape_ID")
+                            shape_id = int(image_id.split("_shape_")[-1]) if "_shape_" in image_id else 0
+
+                            # Update progress
+                            ocr_progress = int((processed_images / total_images) * 10)  # 0-10% for OCR
+                            translation_status[file_id] = TranslationStatus(
+                                status="processing",
+                                progress=ocr_progress,
+                                total_slides=total_slides,
+                                current_slide=slide_num,
+                                review_loop=0,
+                                message=f"이미지 OCR 처리 중... ({processed_images}/{total_images})",
+                            )
+
+                            # Perform OCR
+                            ocr_result = await ocr_agent.extract_text(
+                                image_bytes=image_bytes,
+                                source_lang=source_lang,
+                                context=f"PowerPoint slide {slide_num}",
+                            )
+
+                            # Process OCR result
+                            if ocr_result.error:
+                                logger.warning(
+                                    "ocr_image_error",
+                                    file_id=file_id,
+                                    image_id=image_id,
+                                    error=ocr_result.error,
+                                )
+                                ocr_summary.images_failed += 1
+                            elif ocr_result.blocks and ocr_result.confidence_score >= OCR_CONFIDENCE_THRESHOLD:
+                                # Store each text block with position info
+                                ocr_summary.images_with_text += 1
+
+                                for block in ocr_result.blocks:
+                                    if block.text.strip():
+                                        ocr_blocks_data.append({
+                                            "slide_number": slide_num,
+                                            "shape_id": shape_id,
+                                            "original_text": block.text.strip(),
+                                            "bbox": block.bbox,
+                                            "font_size_hint": block.font_size_hint,
+                                            "confidence": block.confidence,
+                                        })
+
+                                        # Also add to texts_by_slide for translation
+                                        if slide_num not in texts_by_slide:
+                                            texts_by_slide[slide_num] = []
+                                        if block.text.strip() not in texts_by_slide[slide_num]:
+                                            texts_by_slide[slide_num].append(block.text.strip())
+
+                                if ocr_result.is_uncertain:
+                                    ocr_summary.uncertain_extractions += 1
+
+                                logger.warning(
+                                    "ocr_blocks_extracted",
+                                    file_id=file_id,
+                                    slide=slide_num,
+                                    image_id=image_id,
+                                    blocks_count=len(ocr_result.blocks),
+                                    confidence=ocr_result.confidence_score,
+                                    blocks_preview=[b.text[:30] for b in ocr_result.blocks[:3]],
+                                )
+                            elif ocr_result.text and ocr_result.confidence_score >= OCR_CONFIDENCE_THRESHOLD:
+                                # Fallback: no blocks but has text - create single block
+                                ocr_summary.images_with_text += 1
+                                ocr_blocks_data.append({
+                                    "slide_number": slide_num,
+                                    "shape_id": shape_id,
+                                    "original_text": ocr_result.text.strip(),
+                                    "bbox": (5.0, 5.0, 90.0, 90.0),  # Default: near full image
+                                    "font_size_hint": "medium",
+                                    "confidence": ocr_result.confidence_score,
+                                })
+
+                                if slide_num not in texts_by_slide:
+                                    texts_by_slide[slide_num] = []
+                                if ocr_result.text.strip() not in texts_by_slide[slide_num]:
+                                    texts_by_slide[slide_num].append(ocr_result.text.strip())
+
+                                logger.info(
+                                    "ocr_text_extracted_no_blocks",
+                                    file_id=file_id,
+                                    slide=slide_num,
+                                    image_id=image_id,
+                                    text_length=len(ocr_result.text),
+                                )
+                            else:
+                                logger.debug(
+                                    "ocr_no_text_or_low_confidence",
+                                    file_id=file_id,
+                                    image_id=image_id,
+                                    has_text=bool(ocr_result.text),
+                                    confidence=ocr_result.confidence_score,
+                                )
+
+                    logger.warning(
+                        "ocr_extraction_complete",
+                        file_id=file_id,
+                        total_images=total_images,
+                        images_with_text=ocr_summary.images_with_text,
+                        total_blocks=len(ocr_blocks_data),
+                        images_failed=ocr_summary.images_failed,
+                        uncertain_extractions=ocr_summary.uncertain_extractions,
+                    )
+
+            except Exception as ocr_error:
+                # OCR failure should NOT stop the translation pipeline
+                logger.warning(
+                    "ocr_extraction_failed",
+                    file_id=file_id,
+                    error=str(ocr_error),
+                )
+                # Continue without OCR texts
+        else:
+            logger.debug("ocr_disabled", file_id=file_id)
+
+        # Recalculate slides with text (OCR texts already merged above)
+        slides_with_text = len(texts_by_slide)
+
         if slides_with_text == 0:
             translation_status[file_id] = TranslationStatus(
                 status="completed",
@@ -338,7 +505,7 @@ async def process_translation(
 
         translation_status[file_id] = TranslationStatus(
             status="processing",
-            progress=0,
+            progress=10,  # Start at 10% after OCR phase
             total_slides=total_slides,
             current_slide=0,
             review_loop=0,
@@ -346,16 +513,18 @@ async def process_translation(
         )
 
         # Translate slide by slide for better context
+        # Progress: 10-70% for translation (60% range)
         all_translations = {}
         processed_slides = 0
 
         for slide_num, slide_texts in texts_by_slide.items():
             processed_slides += 1
 
-            # Update status
+            # Update status (10% + up to 60% = 10-70%)
+            translation_progress = 10 + int((processed_slides / slides_with_text) * 60)
             translation_status[file_id] = TranslationStatus(
                 status="processing",
-                progress=int((processed_slides / slides_with_text) * 70),
+                progress=translation_progress,
                 total_slides=total_slides,
                 current_slide=slide_num,
                 review_loop=0,
@@ -917,6 +1086,69 @@ async def process_translation(
             notes_ppt_service.add_translation_notes(all_translations, str(output_path))
             logger.info("translation_notes_added", file_id=file_id)
 
+        # === Apply OCR Text Overlays ===
+        # Create text boxes on top of images with translated OCR text
+        if ocr_blocks_data and all_translations:
+            translation_status[file_id] = TranslationStatus(
+                status="processing",
+                progress=97,
+                total_slides=total_slides,
+                current_slide=total_slides,
+                review_loop=0,
+                message="이미지 번역 오버레이 적용 중...",
+            )
+
+            try:
+                # Create OCRTextOverlay objects for each block
+                ocr_overlays = []
+                for block_data in ocr_blocks_data:
+                    original_text = block_data["original_text"]
+                    # Look up translation
+                    translated_text = all_translations.get(original_text)
+                    if translated_text and translated_text != original_text:
+                        ocr_overlays.append(OCRTextOverlay(
+                            slide_number=block_data["slide_number"],
+                            shape_id=block_data["shape_id"],
+                            original_text=original_text,
+                            translated_text=translated_text,
+                            bbox=block_data["bbox"],
+                            font_size_hint=block_data["font_size_hint"],
+                            confidence=block_data["confidence"],
+                        ))
+
+                if ocr_overlays:
+                    # Apply overlays to the output file
+                    overlay_ppt_service = PPTService(str(output_path))
+                    _, overlays_applied = overlay_ppt_service.apply_ocr_overlays(
+                        overlays=ocr_overlays,
+                        output_path=str(output_path),
+                        target_font=target_font or "Arial",
+                    )
+
+                    ocr_summary.images_translated = overlays_applied
+
+                    logger.info(
+                        "ocr_overlays_applied",
+                        file_id=file_id,
+                        total_blocks=len(ocr_blocks_data),
+                        overlays_created=len(ocr_overlays),
+                        overlays_applied=overlays_applied,
+                    )
+                else:
+                    logger.debug(
+                        "no_ocr_overlays_needed",
+                        file_id=file_id,
+                        reason="no_translations_matched",
+                    )
+
+            except Exception as overlay_error:
+                # OCR overlay failure should NOT stop the pipeline
+                logger.warning(
+                    "ocr_overlay_application_failed",
+                    file_id=file_id,
+                    error=str(overlay_error),
+                )
+
         # Log final summary
         logger.debug(
             "final_application_summary",
@@ -928,10 +1160,14 @@ async def process_translation(
         total_texts = sum(len(texts) for texts in texts_by_slide.values())
 
         # Set final message based on whether visual QA was available
+        ocr_msg = ""
+        if ocr_summary.images_translated > 0:
+            ocr_msg = f", 이미지 {ocr_summary.images_translated}개 번역"
+
         if best_score > 0:
-            final_message = f"번역 완료! (품질 점수: {best_score}/100)"
+            final_message = f"번역 완료! (품질 점수: {best_score}/100{ocr_msg})"
         else:
-            final_message = "번역 완료! (시각적 QA 불가 - LibreOffice 미설치)"
+            final_message = f"번역 완료!{ocr_msg}" if ocr_msg else "번역 완료! (시각적 QA 불가 - LibreOffice 미설치)"
 
         translation_status[file_id] = TranslationStatus(
             status="completed",

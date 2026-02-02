@@ -115,3 +115,49 @@ class QAHistoryResponse(BaseModel):
     file_id: str
     iterations: list[QAIterationResponse]
     final_score: int
+
+
+# ============================================================
+# OCR (Image Text Extraction) Models
+# Contract: OCR output must follow this fixed schema.
+# Any change requires updating all consumers.
+# ============================================================
+
+class OCRBlockResponse(BaseModel):
+    """A block of text extracted from an image."""
+    text: str
+    bbox: tuple[int, int, int, int] = (0, 0, 0, 0)  # x1, y1, x2, y2
+    confidence: float = 1.0
+
+
+class OCRResultResponse(BaseModel):
+    """Response model for OCR extraction result.
+
+    This is the API contract for OCR results.
+    """
+    text: str                                    # Extracted text
+    confidence_score: float = 1.0                # 0.0-1.0
+    language_guess: str = "unknown"              # Detected language code
+    blocks: list[OCRBlockResponse] = []          # Detailed text blocks
+    error: Optional[str] = None                  # Error message if failed
+    is_uncertain: bool = False                   # True if low confidence
+
+
+class ImageTextItem(BaseModel):
+    """Represents text extracted from an image in a PPT slide."""
+    slide_number: int
+    image_id: str                                # Unique ID for the image
+    original_text: str                           # OCR extracted text
+    translated_text: Optional[str] = None        # Translated text
+    confidence: float = 1.0                      # OCR confidence
+    is_uncertain: bool = False                   # True if low confidence
+    source: str = "ocr"                          # Always "ocr" for image text
+
+
+class ImageTranslationSummary(BaseModel):
+    """Summary of image OCR and translation for a file."""
+    total_images: int = 0
+    images_with_text: int = 0
+    images_translated: int = 0
+    images_failed: int = 0
+    uncertain_extractions: int = 0               # Count of low-confidence OCR
