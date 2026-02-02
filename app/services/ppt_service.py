@@ -1773,12 +1773,57 @@ class PPTService:
                 except Exception as e:
                     logger.debug("notes_add_error", slide=slide_idx, error=str(e))
 
+        # Add unmatched translations to the first slide's notes
+        unmatched_translations = [
+            (orig, trans) for orig, trans in translations.items()
+            if orig not in seen_originals and orig.strip() != trans.strip()
+        ]
+
+        if unmatched_translations and len(self.presentation.slides) > 0:
+            # Build unmatched notes text
+            unmatched_lines = ["", "=== 기타 번역 (OCR 포함) ===", ""]
+
+            for original, translated in unmatched_translations:
+                original_clean = original.replace('\n', ' ').strip()
+                translated_clean = translated.replace('\n', ' ').strip()
+
+                if len(original_clean) > 100:
+                    original_clean = original_clean[:100] + "..."
+                if len(translated_clean) > 100:
+                    translated_clean = translated_clean[:100] + "..."
+
+                unmatched_lines.append(f"• {original_clean}")
+                unmatched_lines.append(f"  → {translated_clean}")
+                unmatched_lines.append("")
+
+            unmatched_text = "\n".join(unmatched_lines)
+
+            # Add to first slide's notes
+            try:
+                first_slide = self.presentation.slides[0]
+                notes_slide = first_slide.notes_slide
+                notes_frame = notes_slide.notes_text_frame
+
+                if notes_frame.text.strip():
+                    notes_frame.text = notes_frame.text + "\n" + unmatched_text
+                else:
+                    notes_frame.text = unmatched_text
+
+                logger.debug(
+                    "unmatched_translations_added",
+                    count=len(unmatched_translations),
+                )
+            except Exception as e:
+                logger.debug("unmatched_notes_add_error", error=str(e))
+
         self.presentation.save(output_path)
 
         logger.info(
             "translation_notes_complete",
             slides_with_notes=slides_with_notes,
             total_slides=len(self.presentation.slides),
+            matched=len(seen_originals),
+            unmatched=len(unmatched_translations) if unmatched_translations else 0,
         )
 
         return slides_with_notes
